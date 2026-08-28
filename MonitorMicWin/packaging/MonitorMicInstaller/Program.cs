@@ -50,7 +50,8 @@ internal static class Program
         var installDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Programs",
-            ProductName);
+            ProductName,
+            Version);
         var exe = Path.Combine(installDir, "MonitorMic.exe");
 
         var answer = MessageBox.Show(

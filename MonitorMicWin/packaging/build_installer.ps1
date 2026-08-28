@@ -27,7 +27,7 @@ $staging = Join-Path $env:TEMP 'MonitorMic-installer-staging'
 $payload = Join-Path $staging 'payload'
 $payloadZip = Join-Path $staging 'MonitorMicPayload.zip'
 $embeddedPayload = Join-Path $installerProject 'MonitorMicPayload.zip'
-$finalInstaller = Join-Path $repoRoot 'MonitorMicWin\MonitorMicSetup-native-1.2.1.exe'
+$finalInstaller = Join-Path $repoRoot 'MonitorMicWin\MonitorMicSetup-fixed-adb-1.2.1.exe'
 
 if (Test-Path -LiteralPath $staging) {
     Remove-Item -LiteralPath $staging -Recurse -Force
