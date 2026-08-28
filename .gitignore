@@ -1,0 +1,51 @@
+# macOS / IDE
+.DS_Store
+.AppleDouble
+.LSOverride
+*.swp
+
+# Python local environment and caches
+.venv/
+__pycache__/
+*.py[cod]
+
+# macOS build products
+MonitorMic/MonitorMic
+MonitorMic/MonitorMic.app/
+MonitorMic/build/
+MonitorMic/build_cache/
+MonitorMic/*.dmg
+MonitorMic/tone_test
+MonitorMic/tone_test2
+
+# Android generated output and local signing material
+micstreamer/build/
+micstreamer/debug.keystore
+*.apk
+*.idsig
+*.dex
+apk_extract/
+
+# Windows generated output and redistributable/local device binaries
+MonitorMicWin/bin/
+MonitorMicWin/obj/
+MonitorMicWin/publish/
+MonitorMicWin/adb/
+MonitorMicWin/*.exe
+MonitorMicWin/*.pdb
+MonitorMicWin/micstreamer.apk
+MonitorMicWin/driver/
+
+# Local tooling archives / extracted SDKs
+tools/*
+!tools/.gitkeep
+
+# Decompiled / reverse-engineering workspace outputs
+jadx_out/
+apk_extract/
+
+# Local graph/debug exports
+graphflow-out/
+
+# Runtime logs
+*.log

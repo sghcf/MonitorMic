@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>MonitorMic</AssemblyName>
+    <RootNamespace>MonitorMicWin</RootNamespace>
+    <Version>1.2.1</Version>
+    <InformationalVersion>1.2.1</InformationalVersion>
+    <Product>MonitorMic</Product>
+    <Description>Redmi 显示器麦克风 → Windows 虚拟声卡</Description>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- 允许在 macOS/Linux 上交叉构建 Windows 桌面应用 -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- 单文件发布时把嵌入资源一起打进去 -->
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NAudio" Version="2.2.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="app.ico" />
+  </ItemGroup>
+
+</Project>
