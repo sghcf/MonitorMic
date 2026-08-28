@@ -7,6 +7,9 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $publishDir = Join-Path $repoRoot "MonitorMicWin\bin\$Configuration\net8.0-windows\win-x64\publish-selfcontained"
+$installerProject = Join-Path $PSScriptRoot 'MonitorMicInstaller'
+$installerProjectFile = Join-Path $installerProject 'MonitorMicInstaller.csproj'
+$installerPublishDir = Join-Path $installerProject "bin\$Configuration\net8.0-windows\win-x64\publish"
 $required = @(
     (Join-Path $publishDir 'MonitorMic.exe'),
     (Join-Path $repoRoot 'MonitorMicWin\micstreamer.apk'),
@@ -23,14 +26,8 @@ foreach ($path in $required) {
 $staging = Join-Path $env:TEMP 'MonitorMic-installer-staging'
 $payload = Join-Path $staging 'payload'
 $payloadZip = Join-Path $staging 'MonitorMicPayload.zip'
-$sedPath = Join-Path $env:TEMP 'MonitorMicSetup.sed'
-$builtInstaller = Join-Path $env:TEMP 'MonitorMicSetup-1.2.1.exe'
+$embeddedPayload = Join-Path $installerProject 'MonitorMicPayload.zip'
 $finalInstaller = Join-Path $repoRoot 'MonitorMicWin\MonitorMicSetup-1.2.1.exe'
-$iexpress = Join-Path $env:WINDIR 'System32\iexpress.exe'
-
-if (-not (Test-Path -LiteralPath $iexpress)) {
-    throw "Windows IExpress 不存在：$iexpress"
-}
 
 if (Test-Path -LiteralPath $staging) {
     Remove-Item -LiteralPath $staging -Recurse -Force
@@ -41,81 +38,40 @@ Copy-Item -Path (Join-Path $publishDir '*') -Destination $payload -Recurse -Forc
 Copy-Item -LiteralPath (Join-Path $repoRoot 'MonitorMicWin\micstreamer.apk') -Destination $payload -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot 'MonitorMicWin\adb') -Destination (Join-Path $payload 'adb') -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot 'MonitorMicWin\driver') -Destination (Join-Path $payload 'driver') -Recurse -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'THIRD_PARTY_NOTICES.txt') -Destination $payload -Force
 
-if (Test-Path -LiteralPath $payloadZip) {
-    Remove-Item -LiteralPath $payloadZip -Force
-}
 Compress-Archive -Path (Join-Path $payload '*') -DestinationPath $payloadZip -CompressionLevel Optimal
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install.ps1') -Destination $staging -Force
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'THIRD_PARTY_NOTICES.txt') -Destination $staging -Force
+Copy-Item -LiteralPath $payloadZip -Destination $embeddedPayload -Force
 
-if (Test-Path -LiteralPath $sedPath) {
-    Remove-Item -LiteralPath $sedPath -Force
+Push-Location $installerProject
+try {
+    dotnet restore 'MonitorMicInstaller.csproj' --runtime win-x64
+    if ($LASTEXITCODE -ne 0) {
+        throw "安装器项目 restore 失败，退出码：$LASTEXITCODE"
+    }
+
+    if (Test-Path -LiteralPath $installerPublishDir) {
+        Remove-Item -LiteralPath $installerPublishDir -Recurse -Force
+    }
+    dotnet publish 'MonitorMicInstaller.csproj' --configuration $Configuration --runtime win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishDir="bin\$Configuration\net8.0-windows\win-x64\publish\"
+    if ($LASTEXITCODE -ne 0) {
+        throw "安装器 publish 失败，退出码：$LASTEXITCODE"
+    }
 }
-if (Test-Path -LiteralPath $builtInstaller) {
-    Remove-Item -LiteralPath $builtInstaller -Force
-}
-
-$sed = @"
-[Version]
-Class=IEXPRESS
-SEDVersion=3
-
-[Options]
-PackagePurpose=InstallApp
-ShowInstallProgramWindow=0
-HideExtractAnimation=1
-HideExtractDialog=1
-UseLongFileName=1
-InsideCompressed=0
-CAB_FixedSize=0
-CAB_ResvCodeSigning=0
-RebootMode=N
-InstallPrompt=%InstallPrompt%
-DisplayLicense=
-FinishMessage=%FinishMessage%
-TargetName=%TargetName%
-FriendlyName=%FriendlyName%
-AppLaunched=%AppLaunched%
-PostInstallCmd=%PostInstallCmd%
-AdminQuietInstCmd=%AdminQuietInstCmd%
-UserQuietInstCmd=%UserQuietInstCmd%
-SourceFiles=SourceFiles
-
-[Strings]
-InstallPrompt=Start MonitorMic installation?
-FinishMessage=MonitorMic installation completed.
-TargetName=$builtInstaller
-FriendlyName=MonitorMic Windows 1.2.1
-AppLaunched=PowerShell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File install.ps1
-PostInstallCmd=<None>
-AdminQuietInstCmd=
-UserQuietInstCmd=
-FILE0="install.ps1"
-FILE1="MonitorMicPayload.zip"
-FILE2="THIRD_PARTY_NOTICES.txt"
-
-[SourceFiles]
-SourceFiles0=$staging\
-
-[SourceFiles0]
-%FILE0%=
-%FILE1%=
-%FILE2%=
-"@
-Set-Content -LiteralPath $sedPath -Value $sed -Encoding ASCII
-
-$iexpressProcess = Start-Process -FilePath $iexpress -ArgumentList @('/N', '/Q', $sedPath) -Wait -PassThru
-if ($iexpressProcess.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $builtInstaller)) {
-    throw "IExpress 打包失败，退出码：$($iexpressProcess.ExitCode)"
+finally {
+    Pop-Location
 }
 
+$builtInstaller = Join-Path $installerPublishDir 'MonitorMicSetup.exe'
+if (-not (Test-Path -LiteralPath $builtInstaller)) {
+    throw "安装器输出不存在：$builtInstaller"
+}
 Copy-Item -LiteralPath $builtInstaller -Destination $finalInstaller -Force
 $file = Get-Item -LiteralPath $finalInstaller
 if ($file.Length -lt 100KB) {
     throw "生成的安装包异常过小：$($file.Length) bytes"
 }
-$magic = (Get-Content -LiteralPath $finalInstaller -AsByteStream -TotalCount 2)
+$magic = Get-Content -LiteralPath $finalInstaller -AsByteStream -TotalCount 2
 if ($magic[0] -ne 0x4D -or $magic[1] -ne 0x5A) {
     throw '生成的文件不是有效的 Windows PE/EXE 文件。'
 }

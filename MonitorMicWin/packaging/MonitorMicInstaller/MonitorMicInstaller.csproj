@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AssemblyName>MonitorMicSetup</AssemblyName>
+    <RootNamespace>MonitorMicInstaller</RootNamespace>
+    <Version>1.2.1</Version>
+    <InformationalVersion>1.2.1</InformationalVersion>
+    <Product>MonitorMic</Product>
+    <Description>MonitorMic Windows installer</Description>
+    <ApplicationIcon>..\..\app.ico</ApplicationIcon>
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="MonitorMicPayload.zip" LogicalName="MonitorMicPayload.zip" />
+  </ItemGroup>
+</Project>
