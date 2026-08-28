@@ -32,9 +32,9 @@ public readonly record struct PcmStreamFormat(int SampleRate, int Channels, int 
             || !int.TryParse(parts[3], NumberStyles.None, CultureInfo.InvariantCulture, out var bits))
             return false;
 
-        // Android currently sends 48 kHz PCM16 mono/stereo. A bounded sane range
-        // allows compatible servers while rejecting values that cannot be rendered.
-        if (rate is < 8_000 or > 192_000 || channels is < 1 or > 2 || bits != 16)
+        // The Windows output path intentionally has no per-packet converter. Accept
+        // only the Android stream formats that can be rendered without resampling.
+        if (rate != 48000 || channels is < 1 or > 2 || bits != 16)
             return false;
 
         format = new PcmStreamFormat(rate, channels, bits);

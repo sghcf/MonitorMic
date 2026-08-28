@@ -1,48 +1,58 @@
 using System.Reflection;
+using Forms = System.Windows.Forms;
+using System.Windows;
 
 namespace MonitorMicWin;
 
-/// <summary>托盘宿主：图标、右键菜单、主面板显隐、管线与应用状态生命周期。</summary>
-sealed class TrayApp : ApplicationContext
+/// <summary>WPF application host with a lightweight Win32 notification-area icon.</summary>
+sealed class TrayApp : System.Windows.Application
 {
-    readonly NotifyIcon tray;
-    readonly MainForm form;
+    const string ShowEventName = @"Local\MonitorMicWin.ShowWindow";
+    readonly Forms.NotifyIcon tray;
+    readonly MainWindow window;
     readonly AppState state = new();
-    readonly ToolStripMenuItem statusItem;
-    readonly ToolStripMenuItem autoStartItem;
+    readonly Forms.ToolStripMenuItem statusItem;
+    bool quitting;
 
     public TrayApp(bool startMinimized)
     {
-        form = new MainForm(state);
-        _ = form.Handle; // 提前创建句柄，保证后台线程能 BeginInvoke
+        ShutdownMode = ShutdownMode.OnExplicitShutdown;
+        DispatcherUnhandledException += (_, e) =>
+        {
+            Log.Info("UI 异常: " + e.Exception);
+            e.Handled = true;
+        };
 
-        statusItem = new ToolStripMenuItem("MonitorMic 未连接") { Enabled = false };
-        autoStartItem = new ToolStripMenuItem("开机自动启动")
+        window = new MainWindow(state);
+        window.Closing += (_, e) =>
+        {
+            if (!quitting)
+            {
+                e.Cancel = true;
+                window.Hide();
+            }
+        };
+
+        statusItem = new Forms.ToolStripMenuItem("MonitorMic 未连接") { Enabled = false };
+        var menu = new Forms.ContextMenuStrip();
+        menu.Items.Add(statusItem);
+        menu.Items.Add(new Forms.ToolStripSeparator());
+        var healItem = new Forms.ToolStripMenuItem("一键修复并启动串流");
+        healItem.Click += async (_, _) => await state.HealAll();
+        menu.Items.Add(healItem);
+        menu.Items.Add("打开主面板", null, (_, _) => ShowForm());
+        var autoStartItem = new Forms.ToolStripMenuItem("登录后自动启动")
         {
             Checked = AutoStart.IsEnabled,
             CheckOnClick = true
         };
-        autoStartItem.CheckedChanged += (_, _) =>
-        {
-            if (autoStartItem.Checked != AutoStart.IsEnabled)
-                AutoStart.SetEnabled(autoStartItem.Checked);
-        };
-
-        var healItem = new ToolStripMenuItem("一键修复并启动串流");
-        healItem.Click += async (_, _) => await state.HealAll();
-
-        var menu = new ContextMenuStrip();
-        menu.Items.Add(statusItem);
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(healItem);
-        menu.Items.Add("打开主面板", null, (_, _) => ShowForm());
+        autoStartItem.CheckedChanged += (_, _) => AutoStart.SetEnabled(autoStartItem.Checked);
         menu.Items.Add(autoStartItem);
-        menu.Items.Add(new ToolStripSeparator());
-        var verItem = new ToolStripMenuItem($"版本 v{Program.Version}") { Enabled = false };
-        menu.Items.Add(verItem);
+        menu.Items.Add(new Forms.ToolStripSeparator());
+        menu.Items.Add(new Forms.ToolStripMenuItem($"版本 v{Program.Version}") { Enabled = false });
         menu.Items.Add("退出", null, (_, _) => Quit());
 
-        tray = new NotifyIcon
+        tray = new Forms.NotifyIcon
         {
             Icon = LoadAppIcon(),
             Text = $"MonitorMic v{Program.Version}",
@@ -53,85 +63,68 @@ sealed class TrayApp : ApplicationContext
 
         state.Pipeline.OnState += (running, streaming, info) =>
         {
-            try
+            Dispatcher.BeginInvoke(() =>
             {
-                form.BeginInvoke(() =>
-                {
-                    statusItem.Text = streaming ? $"串流中  {info}"
-                        : running ? "接收器运行中，等待连接"
-                        : "接收器未启动";
-                    tray.Text = Truncate($"MonitorMic — {(streaming ? "串流中" : "空闲")}", 63);
-                });
-            }
-            catch { }
+                statusItem.Text = streaming ? $"串流中  {info}"
+                    : running ? "接收器运行中，等待连接" : "接收器未启动";
+                tray.Text = Truncate($"MonitorMic — {(streaming ? "串流中" : "空闲")}", 63);
+            });
         };
 
         state.StartPolling();
         Log.Info($"MonitorMic for Windows v{Program.Version} 已启动");
+        if (!startMinimized) ShowForm();
+        else tray.ShowBalloonTip(4000, "MonitorMic 已在后台运行", "双击托盘图标打开主面板。", Forms.ToolTipIcon.Info);
 
-        if (!startMinimized)
+        var showSignal = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
+        var signalThread = new Thread(() =>
         {
-            ShowForm();
-        }
-        else
-        {
-            // 托盘气泡提示，避免用户以为"没反应"
-            tray.ShowBalloonTip(4000, "MonitorMic 已在后台运行",
-                "双击此图标打开主面板。", ToolTipIcon.Info);
-        }
+            while (!quitting)
+            {
+                showSignal.WaitOne();
+                if (!quitting) Dispatcher.BeginInvoke(ShowForm);
+            }
+        }) { IsBackground = true, Name = "show-signal" };
+        signalThread.Start();
 
-        // 启动后自动恢复串流（配合开机自启，实现"登录即可用"）
         Task.Run(async () =>
         {
             await state.Connect();
-            for (int i = 0; i < 10 && !state.AdbConnected; i++)
-                await Task.Delay(500);
-            if (state.AutoHeal && state.AdbConnected && !state.Pipeline.Streaming)
-                await state.HealAll();
+            for (var i = 0; i < 10 && !state.AdbConnected; i++) await Task.Delay(500);
+            if (state.AutoHeal && state.AdbConnected && !state.Pipeline.Streaming) await state.HealAll();
         });
     }
 
-    static string Truncate(string s, int n) => s.Length <= n ? s : s[..n];
+    static string Truncate(string value, int max) => value.Length <= max ? value : value[..max];
 
     void ShowForm()
     {
-        form.Show();
-        form.WindowState = FormWindowState.Normal;
-        form.Activate();
-    }
-
-    /// <summary>供"第二实例"信号线程调用：安全弹到 UI 线程显示主窗口。</summary>
-    public void RequestShow()
-    {
-        try
-        {
-            if (form.IsHandleCreated && form.InvokeRequired)
-                form.BeginInvoke(() => ShowForm());
-            else
-                ShowForm();
-        }
-        catch { }
+        if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(ShowForm); return; }
+        window.Show();
+        if (window.WindowState == WindowState.Minimized) window.WindowState = WindowState.Normal;
+        window.Activate();
     }
 
     void Quit()
     {
-        form.ReallyQuit = true;
+        if (quitting) return;
+        quitting = true;
+        window.AllowClose = true;
         state.Pipeline.Dispose();
         tray.Visible = false;
         tray.Dispose();
-        Application.Exit();
+        window.Close();
+        Shutdown();
     }
 
-    /// <summary>从嵌入资源加载应用图标（单文件发布也有效）。</summary>
-    public static Icon LoadAppIcon()
+    public static System.Drawing.Icon LoadAppIcon()
     {
         try
         {
-            var asm = Assembly.GetExecutingAssembly();
-            using var stream = asm.GetManifestResourceStream("MonitorMicWin.app.ico");
-            if (stream != null) return new Icon(stream);
+            using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("MonitorMicWin.app.ico");
+            if (stream != null) return new System.Drawing.Icon(stream);
         }
         catch { }
-        return SystemIcons.Application;
+        return System.Drawing.SystemIcons.Application;
     }
 }

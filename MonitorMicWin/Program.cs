@@ -1,4 +1,5 @@
 using System.Reflection;
+using Forms = System.Windows.Forms;
 
 namespace MonitorMicWin;
 
@@ -10,7 +11,7 @@ static class Program
     public static string Version =>
         Assembly.GetExecutingAssembly()
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
-        ?? "1.2.2";
+        ?? "1.2.3";
 
     [STAThread]
     static void Main(string[] args)
@@ -23,19 +24,16 @@ static class Program
             return;
         }
 
-        ApplicationConfiguration.Initialize(); // 已含 HighDpiMode=SystemAware
-
         // 全局异常兜底：任何崩溃都写日志并弹窗，绝不"无声无息没反应"
-        Application.ThreadException += (_, e) => Log.Info("UI 异常: " + e.Exception);
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
         {
             var msg = e.ExceptionObject?.ToString() ?? "未知错误";
             try { Log.Info("致命错误: " + msg); } catch { }
             try
             {
-                MessageBox.Show(
+                Forms.MessageBox.Show(
                     "MonitorMic 遇到错误已退出。\n日志: %LocalAppData%\\MonitorMic\\monitor-mic.log\n\n" + msg,
-                    "MonitorMic", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    "MonitorMic", Forms.MessageBoxButtons.OK, Forms.MessageBoxIcon.Error);
             }
             catch { }
         };
@@ -44,27 +42,13 @@ static class Program
         {
             var minimized = args.Contains("--minimized");
             var app = new TrayApp(minimized);
-
-            // 监听"第二个实例请求显示主窗口"信号
-            var showSignal = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
-            var t = new Thread(() =>
-            {
-                while (true)
-                {
-                    showSignal.WaitOne();
-                    try { app.RequestShow(); } catch { }
-                }
-            })
-            { IsBackground = true, Name = "show-signal" };
-            t.Start();
-
-            Application.Run(app);
+            app.Run();
         }
         catch (Exception ex)
         {
             try { Log.Info("启动失败: " + ex); } catch { }
-            MessageBox.Show("MonitorMic 启动失败:\n\n" + ex, "MonitorMic",
-                MessageBoxButtons.OK, MessageBoxIcon.Error);
+            Forms.MessageBox.Show("MonitorMic 启动失败:\n\n" + ex, "MonitorMic",
+                Forms.MessageBoxButtons.OK, Forms.MessageBoxIcon.Error);
         }
     }
 }

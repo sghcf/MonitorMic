@@ -3,13 +3,15 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>MonitorMic</AssemblyName>
     <RootNamespace>MonitorMicWin</RootNamespace>
-    <Version>1.2.2</Version>
-    <InformationalVersion>1.2.2</InformationalVersion>
+    <Version>1.2.3</Version>
+    <InformationalVersion>1.2.3</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Product>MonitorMic</Product>
     <Description>Redmi 显示器麦克风 → Windows 虚拟声卡</Description>
     <ApplicationIcon>app.ico</ApplicationIcon>
@@ -38,6 +40,8 @@
     <Compile Remove="AudioProbe\**" />
     <EmbeddedResource Remove="AudioProbe\**" />
     <None Remove="AudioProbe\**" />
-  </ItemGroup>
+    <Compile Remove="MainForm.cs" />
+    <Compile Remove="LevelMeter.cs" />
+</ItemGroup>
 
 </Project>

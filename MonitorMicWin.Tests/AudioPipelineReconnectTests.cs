@@ -35,6 +35,24 @@ public sealed class AudioPipelineReconnectTests
         Assert.True(streamingCount >= 2);
     }
 
+    [Fact]
+    public async Task StopCancelsPendingReceivePromptly()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        using var pipeline = new AudioPipeline();
+
+        pipeline.Start("127.0.0.1", port);
+        using var client = await listener.AcceptTcpClientAsync().WaitAsync(TimeSpan.FromSeconds(3));
+
+        var started = DateTime.UtcNow;
+        pipeline.Stop();
+
+        Assert.True((DateTime.UtcNow - started).TotalSeconds < 1.5,
+            "Stop should cancel the pending TCP receive without waiting for a socket timeout.");
+    }
+
     static async Task SendFragmentedStreamAsync(TcpClient client)
     {
         var stream = client.GetStream();

@@ -61,7 +61,8 @@ public sealed class PcmStreamParserTests
     }
 
     [Theory]
-    [InlineData("PCM 0 2 16\n")]
+        [InlineData("PCM 0 2 16\n")]
+    [InlineData("PCM 44100 2 16\n")]
     [InlineData("PCM 48000 0 16\n")]
     [InlineData("PCM 48000 9 16\n")]
     [InlineData("PCM 48000 2 8\n")]
