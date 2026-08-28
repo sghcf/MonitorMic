@@ -1,0 +1,21 @@
+MonitorMic Windows - Third-party notices
+
+VB-CABLE
+--------
+This package includes the VB-CABLE driver package from VB-Audio Software.
+Origin: https://www.vb-cable.com/
+The VB-CABLE software is donationware. Please identify VB-Audio as the origin
+and consider donating/purchasing a license if you find it useful or use it
+professionally. The driver must be installed with administrator approval and
+may require a Windows restart.
+
+Android SDK Platform-Tools / adb
+--------------------------------
+The bundled adb executable is from Google's Android SDK Platform-Tools.
+Origin and license: https://developer.android.com/tools/releases/platform-tools
+Use is subject to the Android Software Development Kit License Agreement.
+
+NAudio
+------
+MonitorMic uses NAudio 2.2.1 under its applicable open-source license.
+Origin: https://github.com/naudio/NAudio
