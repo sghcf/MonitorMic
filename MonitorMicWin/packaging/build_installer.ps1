@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$publishDir = Join-Path $env:TEMP "MonitorMic-publish-1.2.3-$Configuration"
+$publishDir = Join-Path $env:TEMP "MonitorMic-publish-1.2.4-$Configuration"
 $installerProject = Join-Path $PSScriptRoot 'MonitorMicInstaller'
 $installerProjectFile = Join-Path $installerProject 'MonitorMicInstaller.csproj'
 $installerPublishDir = Join-Path $installerProject "bin\$Configuration\net8.0-windows\win-x64\publish"
@@ -42,7 +42,7 @@ $staging = Join-Path $env:TEMP 'MonitorMic-installer-staging'
 $payload = Join-Path $staging 'payload'
 $payloadZip = Join-Path $staging 'MonitorMicPayload.zip'
 $embeddedPayload = Join-Path $installerProject 'MonitorMicPayload.zip'
-$finalInstaller = Join-Path $repoRoot 'MonitorMicWin\MonitorMicSetup-1.2.3.exe'
+$finalInstaller = Join-Path $repoRoot 'MonitorMicWin\MonitorMicSetup-1.2.4.exe'
 
 if (Test-Path -LiteralPath $staging) {
     Remove-Item -LiteralPath $staging -Recurse -Force

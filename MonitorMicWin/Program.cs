@@ -11,7 +11,7 @@ static class Program
     public static string Version =>
         Assembly.GetExecutingAssembly()
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
-        ?? "1.2.3";
+        ?? "1.2.4";
 
     [STAThread]
     static void Main(string[] args)

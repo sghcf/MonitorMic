@@ -6,11 +6,10 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <InvariantGlobalization>true</InvariantGlobalization>
     <AssemblyName>MonitorMicSetup</AssemblyName>
     <RootNamespace>MonitorMicInstaller</RootNamespace>
-    <Version>1.2.3</Version>
-    <InformationalVersion>1.2.3</InformationalVersion>
+    <Version>1.2.4</Version>
+    <InformationalVersion>1.2.4</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Product>MonitorMic</Product>
     <Description>MonitorMic Windows installer</Description>

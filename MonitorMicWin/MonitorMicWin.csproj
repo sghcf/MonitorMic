@@ -9,8 +9,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>MonitorMic</AssemblyName>
     <RootNamespace>MonitorMicWin</RootNamespace>
-    <Version>1.2.3</Version>
-    <InformationalVersion>1.2.3</InformationalVersion>
+    <Version>1.2.4</Version>
+    <InformationalVersion>1.2.4</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Product>MonitorMic</Product>
     <Description>Redmi 显示器麦克风 → Windows 虚拟声卡</Description>
@@ -18,7 +18,6 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- 允许在 macOS/Linux 上交叉构建 Windows 桌面应用 -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
-    <InvariantGlobalization>true</InvariantGlobalization>
     <!-- 单文件发布时把嵌入资源一起打进去 -->
     <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
   </PropertyGroup>
