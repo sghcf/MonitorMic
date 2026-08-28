@@ -8,8 +8,8 @@ namespace MonitorMicInstaller;
 internal static class Program
 {
     private const string ProductName = "MonitorMic";
-    private const string Version = "1.2.1";
-    private const string InstallFolder = "1.2.1-output-fix";
+    private const string Version = "1.2.2";
+    private const string InstallFolder = "1.2.2-gain-fix";
 
     [STAThread]
     private static int Main(string[] args)

@@ -28,11 +28,17 @@ sealed class MainForm : Form
     readonly Label deviceLabel;
     readonly Button cableButton;
     readonly Button toneButton;
+    readonly ComboBox gainCombo;
     readonly CheckBox autoStartCheck;
     readonly CheckBox autoHealCheck;
     readonly TextBox logBox;
     readonly System.Windows.Forms.Timer uiTimer;
+    readonly object pendingLogGate = new();
+    readonly Queue<string> pendingLogLines = new();
+    const int MaxPendingLogLines = 1000;
+    const int MaxDisplayedLogLines = 500;
     float currentLevel;
+    static readonly float[] GainValues = { 1f, 2f, 4f, 8f, 12f, 16f };
 
     public MainForm(AppState state)
     {
@@ -125,6 +131,30 @@ sealed class MainForm : Form
         Controls.Add(toneButton);
         y += 40;
 
+        // ---- 输出增益 ----
+        Controls.Add(new Label { Text = "输出增益", AutoSize = true, Location = new Point(16, y + 5) });
+        gainCombo = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Location = new Point(104, y),
+            Width = 105,
+            Height = 27
+        };
+        foreach (var value in GainValues) gainCombo.Items.Add($"{value:0.#}×");
+        var initialGainIndex = Array.FindIndex(GainValues, value => Math.Abs(value - state.OutputGain) < 0.01f);
+        gainCombo.SelectedIndex = initialGainIndex >= 0 ? initialGainIndex : 3;
+        gainCombo.SelectedIndexChanged += (_, _) =>
+        {
+            if (gainCombo.SelectedIndex >= 0)
+            {
+                state.OutputGain = GainValues[gainCombo.SelectedIndex];
+                state.SaveConfig();
+            }
+        };
+        Controls.Add(gainCombo);
+        Controls.Add(new Label { Text = "过大时会限幅，建议先用 8×", AutoSize = true, Location = new Point(220, y + 5), ForeColor = Color.DimGray });
+        y += 40;
+
         // ---- 开关 ----
         autoStartCheck = new CheckBox
         {
@@ -170,15 +200,11 @@ sealed class MainForm : Form
         // ---- 事件 ----
         Log.OnLine += line =>
         {
-            try
+            lock (pendingLogGate)
             {
-                BeginInvoke(() =>
-                {
-                    logBox.AppendText(line + Environment.NewLine);
-                    if (logBox.TextLength > 20000) logBox.Text = logBox.Text[^10000..];
-                });
+                if (pendingLogLines.Count >= MaxPendingLogLines) pendingLogLines.Dequeue();
+                pendingLogLines.Enqueue(line);
             }
-            catch { }
         };
         pipeline.OnLevel += lv => currentLevel = lv;
         pipeline.OnState += (_, _, _) => SafeRefreshUi();
@@ -188,6 +214,7 @@ sealed class MainForm : Form
         uiTimer = new System.Windows.Forms.Timer { Interval = 100 };
         uiTimer.Tick += (_, _) =>
         {
+            FlushPendingLog();
             levelMeter.Level = currentLevel;
             currentLevel *= 0.92f;
             liveLabel.Visible = pipeline.Streaming;
@@ -198,6 +225,27 @@ sealed class MainForm : Form
         uiTimer.Start();
 
         RefreshUi();
+    }
+
+    void FlushPendingLog()
+    {
+        List<string>? batch = null;
+        lock (pendingLogGate)
+        {
+            if (pendingLogLines.Count > 0)
+            {
+                batch = new List<string>(pendingLogLines.Count);
+                while (pendingLogLines.Count > 0) batch.Add(pendingLogLines.Dequeue());
+            }
+        }
+        if (batch == null || batch.Count == 0 || logBox.IsDisposed) return;
+
+        logBox.AppendText(string.Join(Environment.NewLine, batch) + Environment.NewLine);
+        var lines = logBox.Lines;
+        if (lines.Length > MaxDisplayedLogLines)
+            logBox.Lines = lines[^MaxDisplayedLogLines..];
+        logBox.SelectionStart = logBox.TextLength;
+        logBox.ScrollToCaret();
     }
 
     void MakeRow(string title, string tag, int y, out Label status, out Button btn)

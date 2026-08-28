@@ -10,7 +10,7 @@ static class Program
     public static string Version =>
         Assembly.GetExecutingAssembly()
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
-        ?? "1.2.1";
+        ?? "1.2.2";
 
     [STAThread]
     static void Main(string[] args)

@@ -23,6 +23,7 @@ sealed class AudioPipeline : IDisposable
 
     int rate = 48000;
     int channels = 2;
+    float outputGain = PcmGain.Default;
     volatile bool headerParsed;
     DateTime lastDataUtc = DateTime.MinValue;
     DateTime lastLevelUtc = DateTime.MinValue;
@@ -42,6 +43,16 @@ sealed class AudioPipeline : IDisposable
     public string StreamInfo => headerParsed ? $"{rate} Hz · {channels} ch" : "";
     public string? DeviceName => deviceName;
     public volatile bool CableInstalledNow;
+    public float OutputGain
+    {
+        get => Volatile.Read(ref outputGain);
+        set
+        {
+            var clamped = PcmGain.Clamp(value);
+            Volatile.Write(ref outputGain, clamped);
+            Log.Info($"输出增益已设置为 {clamped:0.#}×（峰值限幅）");
+        }
+    }
 
     public void Start(string host, int port = Port)
     {
@@ -194,6 +205,7 @@ sealed class AudioPipeline : IDisposable
         // VB-CABLE is exposed as a stereo render endpoint. A mono stream is
         // explicitly duplicated instead of relying on an implicit device format.
         var outputData = channels == 1 ? MonoToStereo(data) : data.ToArray();
+        PcmGain.ApplyInPlace(outputData, OutputGain);
         lock (gate)
         {
             if (provider == null) return;
@@ -300,6 +312,7 @@ sealed class AudioPipeline : IDisposable
             }
             Log.Info($"✅ 音频输出已就绪: {dev.FriendlyName}");
             Log.Info($"诊断: 输出格式 = {outp.OutputWaveFormat}");
+            Log.Info($"诊断: 输出增益 = {OutputGain:0.#}×（峰值限幅）");
             outp = null; // ownership transferred to the active pipeline
             dev = null; // keep the device wrapper with the active pipeline
         }

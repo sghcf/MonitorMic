@@ -9,8 +9,8 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <AssemblyName>MonitorMicSetup</AssemblyName>
     <RootNamespace>MonitorMicInstaller</RootNamespace>
-    <Version>1.2.1</Version>
-    <InformationalVersion>1.2.1</InformationalVersion>
+    <Version>1.2.2</Version>
+    <InformationalVersion>1.2.2</InformationalVersion>
     <Product>MonitorMic</Product>
     <Description>MonitorMic Windows installer</Description>
     <ApplicationIcon>..\..\app.ico</ApplicationIcon>

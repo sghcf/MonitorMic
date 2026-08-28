@@ -8,8 +8,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>MonitorMic</AssemblyName>
     <RootNamespace>MonitorMicWin</RootNamespace>
-    <Version>1.2.1</Version>
-    <InformationalVersion>1.2.1</InformationalVersion>
+    <Version>1.2.2</Version>
+    <InformationalVersion>1.2.2</InformationalVersion>
     <Product>MonitorMic</Product>
     <Description>Redmi 显示器麦克风 → Windows 虚拟声卡</Description>
     <ApplicationIcon>app.ico</ApplicationIcon>

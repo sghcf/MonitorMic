@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$publishDir = Join-Path $repoRoot "MonitorMicWin\bin\$Configuration\net8.0-windows\win-x64\publish-selfcontained"
+$publishDir = Join-Path $env:TEMP "MonitorMic-publish-gain-fix-$Configuration"
 $installerProject = Join-Path $PSScriptRoot 'MonitorMicInstaller'
 $installerProjectFile = Join-Path $installerProject 'MonitorMicInstaller.csproj'
 $installerPublishDir = Join-Path $installerProject "bin\$Configuration\net8.0-windows\win-x64\publish"
@@ -16,6 +16,21 @@ $required = @(
     (Join-Path $repoRoot 'MonitorMicWin\adb\adb.exe'),
     (Join-Path $repoRoot 'MonitorMicWin\driver\VBCABLE_Setup_x64.exe')
 )
+
+if (Test-Path -LiteralPath $publishDir) {
+    Remove-Item -LiteralPath $publishDir -Recurse -Force
+}
+New-Item -ItemType Directory -Force -Path $publishDir | Out-Null
+Push-Location (Join-Path $repoRoot 'MonitorMicWin')
+try {
+    dotnet publish 'MonitorMicWin.csproj' --configuration $Configuration --runtime win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishDir="$publishDir\"
+    if ($LASTEXITCODE -ne 0) {
+        throw "MonitorMic 发布失败，退出码：$LASTEXITCODE"
+    }
+}
+finally {
+    Pop-Location
+}
 
 foreach ($path in $required) {
     if (-not (Test-Path -LiteralPath $path)) {
@@ -27,7 +42,7 @@ $staging = Join-Path $env:TEMP 'MonitorMic-installer-staging'
 $payload = Join-Path $staging 'payload'
 $payloadZip = Join-Path $staging 'MonitorMicPayload.zip'
 $embeddedPayload = Join-Path $installerProject 'MonitorMicPayload.zip'
-$finalInstaller = Join-Path $repoRoot 'MonitorMicWin\MonitorMicSetup-audio-fixed-1.2.1.exe'
+$finalInstaller = Join-Path $repoRoot 'MonitorMicWin\MonitorMicSetup-gain-fix-1.2.2.exe'
 
 if (Test-Path -LiteralPath $staging) {
     Remove-Item -LiteralPath $staging -Recurse -Force
