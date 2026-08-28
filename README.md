@@ -2,6 +2,8 @@
 
 把 Xiaomi/Redmi 显示器的麦克风通过局域网提供给电脑应用使用。
 
+完整技术规格、协议说明、测试计划和 Windows 端开发任务见 [`PROJECT_SPEC_WINDOWS.md`](PROJECT_SPEC_WINDOWS.md)。
+
 ## 工作方式
 
 显示器上的 `MicStreamer` 是 TCP 音频服务器，监听 `50010` 端口并广播 PCM 音频。macOS 版和 Windows 版是两个独立客户端：它们各自连接显示器，不互相依赖，也可以同时连接同一台显示器。
