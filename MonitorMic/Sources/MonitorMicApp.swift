@@ -5,6 +5,15 @@ import AppKit
 struct MonitorMicApp: App {
     @StateObject private var state = AppState()
 
+    init() {
+        let currentPID = ProcessInfo.processInfo.processIdentifier
+        if let existing = NSRunningApplication.runningApplications(withBundleIdentifier: "com.example.monitormic")
+            .first(where: { $0.processIdentifier != currentPID }) {
+            existing.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+            exit(EXIT_SUCCESS)
+        }
+    }
+
     var body: some Scene {
         WindowGroup(id: "main") {
             ContentView()

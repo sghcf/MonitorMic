@@ -180,6 +180,7 @@ final class AppState: ObservableObject {
         hasBootstrapped = true
         startPolling()
         await refreshStatus(force: true)
+        updateBlackHoleStatus()
         if autoHeal, monitor.adbConnected { await healAll() }
     }
 
@@ -220,7 +221,6 @@ final class AppState: ObservableObject {
             device.wakeupDisabled = false
             device.appInstalled = false
         }
-        updateBlackHoleStatus()
     }
 
     private func clearDeviceStatus() {

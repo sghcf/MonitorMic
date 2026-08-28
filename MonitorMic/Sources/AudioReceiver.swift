@@ -3,6 +3,93 @@ import Network
 import AVFoundation
 import AudioToolbox
 
+/// A bounded, thread-safe stereo Float32 ring buffer. The network queue writes
+/// samples while AVAudioSourceNode's real-time render thread reads them.
+private final class StereoFloatRingBuffer {
+    private let capacityFrames: Int
+    private var samples: [Float]
+    private var readFrame = 0
+    private var writeFrame = 0
+    private var storedFrames = 0
+    private let lock = NSLock()
+
+    init(capacityFrames: Int) {
+        self.capacityFrames = max(1, capacityFrames)
+        self.samples = Array(repeating: 0, count: max(1, capacityFrames) * 2)
+    }
+
+    var availableFrames: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedFrames
+    }
+
+    func clear() {
+        lock.lock()
+        readFrame = 0
+        writeFrame = 0
+        storedFrames = 0
+        lock.unlock()
+    }
+
+    func append(left: Float, right: Float) {
+        lock.lock()
+        if storedFrames == capacityFrames {
+            readFrame = (readFrame + 1) % capacityFrames
+            storedFrames -= 1
+        }
+        let offset = writeFrame * 2
+        samples[offset] = left
+        samples[offset + 1] = right
+        writeFrame = (writeFrame + 1) % capacityFrames
+        storedFrames += 1
+        lock.unlock()
+    }
+
+    func append(_ buffer: AVAudioPCMBuffer) {
+        guard let channels = buffer.floatChannelData else { return }
+        let frames = Int(buffer.frameLength)
+        guard frames > 0 else { return }
+        let left = channels[0]
+        let right = buffer.format.channelCount > 1 ? channels[1] : channels[0]
+        for frame in 0..<frames {
+            append(left: left[frame], right: right[frame])
+        }
+    }
+
+    func render(to audioBufferList: UnsafeMutablePointer<AudioBufferList>, frameCount: Int) {
+        let buffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
+        guard frameCount > 0 else { return }
+
+        lock.lock()
+        let framesToRead = min(frameCount, storedFrames)
+        for frame in 0..<frameCount {
+            let offset = frame * 2
+            let left: Float
+            let right: Float
+            if frame < framesToRead {
+                let ringOffset = readFrame * 2
+                left = samples[ringOffset]
+                right = samples[ringOffset + 1]
+                readFrame = (readFrame + 1) % capacityFrames
+                storedFrames -= 1
+            } else {
+                left = 0
+                right = 0
+            }
+
+            if buffers.count >= 2 {
+                buffers[0].mData?.assumingMemoryBound(to: Float.self)[frame] = left
+                buffers[1].mData?.assumingMemoryBound(to: Float.self)[frame] = right
+            } else if buffers.count == 1 {
+                buffers[0].mData?.assumingMemoryBound(to: Float.self)[offset] = left
+                buffers[0].mData?.assumingMemoryBound(to: Float.self)[offset + 1] = right
+            }
+        }
+        lock.unlock()
+    }
+}
+
 /// Receives the PCM stream published by one display and routes it to BlackHole.
 ///
 /// The Android service is the broadcaster. A macOS client is intentionally a
@@ -26,18 +113,20 @@ final class AudioReceiver {
     private var channels = 2
     private var headerData = Data()
     private var pcmData = Data()
+    private var pcmReadOffset = 0
     private var headerParsed = false
     private var lastDataTime = Date.distantPast
     private var lastLevelTime = Date.distantPast
     private var lastEngineRebuild = Date.distantPast
 
-    private var engine: AVAudioEngine?
-    private var player: AVAudioPlayerNode?
+    private var outputUnit: AudioUnit?
     private var playFormat: AVAudioFormat?
-    private var pendingBuffers = 0
-    private var playing = false
-    private var lastCompletion = Date.distantPast
+    private var converter: AVAudioConverter?
+    private var converterSourceFormat: AVAudioFormat?
+    private var converterSourceKey: String?
+    private var didAnnounceOutput = false
     private var watchdog: DispatchSourceTimer?
+    private let audioRing = StereoFloatRingBuffer(capacityFrames: 48_000 * 2)
 
     private let framesPerBuffer = 1024
     private let targetPendingBuffers = 12       // about 256 ms at 48 kHz
@@ -65,7 +154,6 @@ final class AudioReceiver {
             }
             self.running = true
             self.generation += 1
-            self.startEngineIfPossible()
             self.startWatchdog()
             self.connectOnce()
             self.onStateChange?(true, false, nil)
@@ -94,7 +182,7 @@ final class AudioReceiver {
         queue.async { [weak self] in
             guard let self else { return }
             self.startEngineIfPossible()
-            guard self.engine?.isRunning == true, self.player != nil else {
+            guard self.isOutputUnitRunning else {
                 self.onLog?("❌ BlackHole 输出未就绪，无法播放测试音")
                 return
             }
@@ -200,12 +288,13 @@ final class AudioReceiver {
     private func resetStreamState() {
         headerData.removeAll(keepingCapacity: true)
         pcmData.removeAll(keepingCapacity: true)
+        pcmReadOffset = 0
         headerParsed = false
-        playing = false
-        pendingBuffers = 0
-        lastCompletion = Date.distantPast
-        player?.stop()
-        player?.reset()
+        didAnnounceOutput = false
+        audioRing.clear()
+        converter = nil
+        converterSourceFormat = nil
+        converterSourceKey = nil
     }
 
     private func tryParseHeader() {
@@ -232,6 +321,11 @@ final class AudioReceiver {
         lastDataTime = Date()
         onLog?("流参数: \(rate) Hz / \(channelCount) 声道 / \(bits) bit")
         onStateChange?(true, true, "\(rate) Hz · \(channelCount) ch")
+        // Wait until the display has sent a valid stream header before creating
+        // the Core Audio graph. Starting it before the Android service is ready
+        // can leave AVAudioEngine stopped during device startup and trigger a
+        // needless rebuild loop.
+        startEngineIfPossible()
 
         let restStart = headerData.index(after: newline)
         let rest = headerData[restStart...]
@@ -249,52 +343,69 @@ final class AudioReceiver {
         let bytesPerFrame = channels * MemoryLayout<Int16>.size
         pcmData.append(data)
         let bufferBytes = framesPerBuffer * bytesPerFrame
-        while pcmData.count >= bufferBytes {
-            if playing && pendingBuffers >= targetPendingBuffers {
-                // Drop old audio when the output falls behind. Keeping latency bounded
-                // is more useful for a live microphone than preserving every sample.
-                pcmData.removeFirst(bufferBytes)
-                continue
-            }
-            let chunk = Data(pcmData.prefix(bufferBytes))
-            pcmData.removeFirst(bufferBytes)
-            guard let audioBuffer = makeAudioBuffer(from: chunk) else { continue }
-            guard let player else { continue }
-            pendingBuffers += 1
-            player.scheduleBuffer(audioBuffer) { [weak self] in
-                guard let self else { return }
-                self.queue.async {
-                    self.pendingBuffers = max(0, self.pendingBuffers - 1)
-                    self.lastCompletion = Date()
-                }
-            }
+        while pcmData.count - pcmReadOffset >= bufferBytes {
+            let end = pcmReadOffset + bufferBytes
+            let chunk = Data(pcmData[pcmReadOffset..<end])
+            pcmReadOffset = end
+            appendAudioChunk(chunk)
         }
 
-        if !playing, pendingBuffers >= targetPendingBuffers / 2,
-           let player, engine?.isRunning == true {
-            player.play()
-            playing = true
-            lastCompletion = Date()
+        if !didAnnounceOutput,
+           audioRing.availableFrames >= framesPerBuffer * (targetPendingBuffers / 2),
+           isOutputUnitRunning {
+            didAnnounceOutput = true
             onLog?("缓冲完成，开始输出到 BlackHole")
         }
 
         // A malformed or stalled sender must not grow memory without bound.
         let maxBytes = bufferBytes * (targetPendingBuffers + 4)
-        if pcmData.count > maxBytes {
-            pcmData.removeFirst(pcmData.count - bufferBytes * 4)
+        if pcmData.count - pcmReadOffset > maxBytes {
+            let keepStart = max(0, pcmData.count - bufferBytes * 4)
+            pcmData = Data(pcmData[keepStart...])
+            pcmReadOffset = 0
+        } else if pcmReadOffset >= 64 * 1024 || pcmReadOffset * 2 >= pcmData.count {
+            // Avoid Data.removeFirst on every 21 ms block. Compact only after a
+            // meaningful prefix has been consumed, which keeps allocation/copy
+            // pressure low during a long-running stream.
+            pcmData.removeSubrange(0..<pcmReadOffset)
+            pcmReadOffset = 0
         }
     }
 
-    private func makeAudioBuffer(from data: Data) -> AVAudioPCMBuffer? {
+    private func appendAudioChunk(_ data: Data) {
+        let frames = data.count / (channels * MemoryLayout<Int16>.size)
+        guard frames > 0 else { return }
+
+        // The Android service currently publishes 48 kHz, 16-bit mono/stereo
+        // PCM. Convert that common path directly into the bounded ring buffer.
+        if sampleRate == 48_000, (channels == 1 || channels == 2) {
+            data.withUnsafeBytes { raw in
+                let bytes = raw.bindMemory(to: UInt8.self)
+                for frame in 0..<frames {
+                    let offset = frame * channels * MemoryLayout<Int16>.size
+                    let leftBits = UInt16(bytes[offset]) | (UInt16(bytes[offset + 1]) << 8)
+                    let left = Float(Int16(bitPattern: leftBits)) / 32_768.0
+                    let right: Float
+                    if channels == 1 {
+                        right = left
+                    } else {
+                        let rightBits = UInt16(bytes[offset + 2]) | (UInt16(bytes[offset + 3]) << 8)
+                        right = Float(Int16(bitPattern: rightBits)) / 32_768.0
+                    }
+                    audioRing.append(left: left, right: right)
+                }
+            }
+            return
+        }
+
         guard let format = playFormat,
               let sourceFormat = AVAudioFormat(commonFormat: .pcmFormatInt16,
                                                 sampleRate: Double(sampleRate),
                                                 channels: AVAudioChannelCount(channels),
-                                                interleaved: true) else { return nil }
-        let frames = data.count / (channels * MemoryLayout<Int16>.size)
+                                                interleaved: true) else { return }
         guard let input = AVAudioPCMBuffer(pcmFormat: sourceFormat,
                                            frameCapacity: AVAudioFrameCount(frames)),
-              let inputData = input.mutableAudioBufferList.pointee.mBuffers.mData else { return nil }
+              let inputData = input.mutableAudioBufferList.pointee.mBuffers.mData else { return }
         input.frameLength = AVAudioFrameCount(frames)
         data.withUnsafeBytes { raw in
             if let base = raw.baseAddress { inputData.copyMemory(from: base, byteCount: data.count) }
@@ -302,9 +413,14 @@ final class AudioReceiver {
 
         guard let output = AVAudioPCMBuffer(pcmFormat: format,
                                             frameCapacity: AVAudioFrameCount(ceil(Double(frames) * 48_000.0 / Double(sampleRate)) + 2)) else {
-            return nil
+            return
         }
-        let converter = AVAudioConverter(from: sourceFormat, to: format)
+        let sourceKey = "\(sampleRate):\(channels)"
+        if converterSourceKey != sourceKey {
+            converterSourceFormat = sourceFormat
+            converterSourceKey = sourceKey
+            converter = AVAudioConverter(from: sourceFormat, to: format)
+        }
         var supplied = false
         var conversionError: NSError?
         let status = converter?.convert(to: output, error: &conversionError) { _, inputStatus in
@@ -318,9 +434,9 @@ final class AudioReceiver {
         }
         guard status == .haveData || status == .inputRanDry, output.frameLength > 0 else {
             if let conversionError { onLog?("⚠️ PCM 转换失败: \(conversionError.localizedDescription)") }
-            return nil
+            return
         }
-        return output
+        audioRing.append(output)
     }
 
     private func updateLevel(_ data: Data) {
@@ -346,69 +462,132 @@ final class AudioReceiver {
     // MARK: - Engine self-healing
 
     private func startEngineIfPossible() {
-        guard engine == nil else { return }
+        guard outputUnit == nil else { return }
         guard let blackHole = Self.findOutputDevice(matching: "BlackHole") else {
             onLog?("⚠️ 未找到 BlackHole 输出设备，请安装 BlackHole 2ch")
             return
         }
-        let newEngine = AVAudioEngine()
-        let newPlayer = AVAudioPlayerNode()
+        var description = AudioComponentDescription(componentType: kAudioUnitType_Output,
+                                                    componentSubType: kAudioUnitSubType_HALOutput,
+                                                    componentManufacturer: kAudioUnitManufacturer_Apple,
+                                                    componentFlags: 0,
+                                                    componentFlagsMask: 0)
+        guard let component = AudioComponentFindNext(nil, &description) else {
+            onLog?("❌ 无法创建 macOS 音频输出单元")
+            return
+        }
+        var unit: AudioUnit?
+        guard AudioComponentInstanceNew(component, &unit) == noErr, let unit else {
+            onLog?("❌ 无法实例化 macOS 音频输出单元")
+            return
+        }
+
+        var disableInput: UInt32 = 0
+        _ = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO,
+                                 kAudioUnitScope_Input, 1,
+                                 &disableInput, UInt32(MemoryLayout<UInt32>.size))
+        var device = blackHole
+        let deviceStatus = AudioUnitSetProperty(unit,
+                                                 kAudioOutputUnitProperty_CurrentDevice,
+                                                 kAudioUnitScope_Global, 0,
+                                                 &device,
+                                                 UInt32(MemoryLayout<AudioDeviceID>.size))
+        guard deviceStatus == noErr else {
+            onLog?("❌ 无法路由到 BlackHole（错误 \(deviceStatus)）")
+            AudioComponentInstanceDispose(unit)
+            return
+        }
+
         guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32,
                                          sampleRate: 48_000,
                                          channels: 2,
-                                         interleaved: false) else { return }
-        newEngine.attach(newPlayer)
-        newEngine.connect(newPlayer, to: newEngine.mainMixerNode, format: format)
-
-        guard let audioUnit = newEngine.outputNode.audioUnit else {
-            onLog?("❌ 无法访问 macOS 音频输出单元，未启动音频引擎")
+                                         interleaved: false) else {
+            AudioComponentInstanceDispose(unit)
             return
         }
-        var device = blackHole
-        let status = AudioUnitSetProperty(audioUnit,
-                                          kAudioOutputUnitProperty_CurrentDevice,
-                                          kAudioUnitScope_Global, 0,
-                                          &device,
-                                          UInt32(MemoryLayout<AudioDeviceID>.size))
-        guard status == noErr else {
-            onLog?("❌ 无法路由到 BlackHole（错误 \(status)）")
+        var streamDescription = format.streamDescription.pointee
+        let formatStatus = AudioUnitSetProperty(unit,
+                                                 kAudioUnitProperty_StreamFormat,
+                                                 kAudioUnitScope_Input, 0,
+                                                 &streamDescription,
+                                                 UInt32(MemoryLayout<AudioStreamBasicDescription>.size))
+        guard formatStatus == noErr else {
+            onLog?("❌ 无法设置 BlackHole 音频格式（错误 \(formatStatus)）")
+            AudioComponentInstanceDispose(unit)
             return
         }
 
-        newEngine.prepare()
-        do {
-            try newEngine.start()
-            engine = newEngine
-            player = newPlayer
-            playFormat = format
-            pendingBuffers = 0
-            playing = false
-            onLog?("✅ BlackHole 音频引擎已启动")
-        } catch {
-            onLog?("❌ BlackHole 音频引擎启动失败: \(error.localizedDescription)")
+        var callback = AURenderCallbackStruct(inputProc: Self.renderCallback,
+                                               inputProcRefCon: Unmanaged.passUnretained(self).toOpaque())
+        let callbackStatus = AudioUnitSetProperty(unit,
+                                                  kAudioUnitProperty_SetRenderCallback,
+                                                  kAudioUnitScope_Input, 0,
+                                                  &callback,
+                                                  UInt32(MemoryLayout<AURenderCallbackStruct>.size))
+        guard callbackStatus == noErr else {
+            onLog?("❌ 无法设置 BlackHole 音频回调（错误 \(callbackStatus)）")
+            AudioComponentInstanceDispose(unit)
+            return
         }
+
+        let initializeStatus = AudioUnitInitialize(unit)
+        guard initializeStatus == noErr else {
+            onLog?("❌ BlackHole 音频输出初始化失败（错误 \(initializeStatus)）")
+            AudioComponentInstanceDispose(unit)
+            return
+        }
+        outputUnit = unit
+        playFormat = format
+        let startStatus = AudioOutputUnitStart(unit)
+        guard startStatus == noErr else {
+            onLog?("❌ BlackHole 音频输出启动失败（错误 \(startStatus)）")
+            teardownEngine()
+            return
+        }
+        onLog?("✅ BlackHole 音频引擎已启动")
     }
 
     private func teardownEngine() {
-        player?.stop()
-        engine?.stop()
-        engine = nil
-        player = nil
+        if let outputUnit {
+            _ = AudioOutputUnitStop(outputUnit)
+            _ = AudioUnitUninitialize(outputUnit)
+            AudioComponentInstanceDispose(outputUnit)
+        }
+        outputUnit = nil
         playFormat = nil
-        pendingBuffers = 0
-        playing = false
+        converter = nil
+        converterSourceFormat = nil
+        converterSourceKey = nil
+        audioRing.clear()
+    }
+
+    private var isOutputUnitRunning: Bool {
+        guard let outputUnit else { return false }
+        var running: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        let status = AudioUnitGetProperty(outputUnit,
+                                          kAudioOutputUnitProperty_IsRunning,
+                                          kAudioUnitScope_Global, 0,
+                                          &running, &size)
+        return status == noErr && running != 0
+    }
+
+    private static let renderCallback: AURenderCallback = { refCon, _, _, _, frameCount, audioBufferList in
+        guard let audioBufferList else { return noErr }
+        let receiver = Unmanaged<AudioReceiver>.fromOpaque(refCon).takeUnretainedValue()
+        receiver.audioRing.render(to: audioBufferList, frameCount: Int(frameCount))
+        return noErr
     }
 
     private func engineNeedsRebuild() -> Bool {
-        guard let engine else { return true }
-        guard engine.isRunning else { return true }
-        // Do not compare device IDs here. Core Audio may report a transient
-        // zero/different ID while BlackHole is being re-enumerated even though
-        // the running engine is still correctly routed. A false positive would
-        // repeatedly tear down a healthy live stream. Missing devices and a
-        // stopped engine are sufficient signals; the route is set explicitly
-        // when the engine is created.
-        return Self.findOutputDevice(matching: "BlackHole") == nil
+        guard outputUnit != nil else { return true }
+        guard isOutputUnitRunning else { return true }
+        // Do not query the Core Audio device list on every watchdog tick. During
+        // normal device enumeration that list can briefly be empty, which used
+        // to make a healthy engine look broken and caused a teardown/rebuild
+        // loop every few seconds. The route is set explicitly at startup; a
+        // stopped engine is the reliable signal that it needs rebuilding.
+        return false
     }
 
     private func rebuildEngine(reason: String) {
@@ -428,9 +607,6 @@ final class AudioReceiver {
             self.onStateChange?(true, active, active ? "\(self.sampleRate) Hz · \(self.channels) ch" : nil)
             if !active { self.onLevel?(0) }
             if active && self.engineNeedsRebuild() { self.rebuildEngine(reason: "音频引擎异常停止或输出设备变化") }
-            if active && self.playing && Date().timeIntervalSince(self.lastCompletion) > 3 {
-                self.rebuildEngine(reason: "播放管线停滞")
-            }
         }
         timer.resume()
         watchdog = timer
