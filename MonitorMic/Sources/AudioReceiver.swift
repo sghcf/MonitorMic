@@ -360,17 +360,19 @@ final class AudioReceiver {
         newEngine.attach(newPlayer)
         newEngine.connect(newPlayer, to: newEngine.mainMixerNode, format: format)
 
-        if let audioUnit = newEngine.outputNode.audioUnit {
-            var device = blackHole
-            let status = AudioUnitSetProperty(audioUnit,
-                                              kAudioOutputUnitProperty_CurrentDevice,
-                                              kAudioUnitScope_Global, 0,
-                                              &device,
-                                              UInt32(MemoryLayout<AudioDeviceID>.size))
-            guard status == noErr else {
-                onLog?("❌ 无法路由到 BlackHole（错误 \(status)）")
-                return
-            }
+        guard let audioUnit = newEngine.outputNode.audioUnit else {
+            onLog?("❌ 无法访问 macOS 音频输出单元，未启动音频引擎")
+            return
+        }
+        var device = blackHole
+        let status = AudioUnitSetProperty(audioUnit,
+                                          kAudioOutputUnitProperty_CurrentDevice,
+                                          kAudioUnitScope_Global, 0,
+                                          &device,
+                                          UInt32(MemoryLayout<AudioDeviceID>.size))
+        guard status == noErr else {
+            onLog?("❌ 无法路由到 BlackHole（错误 \(status)）")
+            return
         }
 
         newEngine.prepare()
@@ -400,13 +402,13 @@ final class AudioReceiver {
     private func engineNeedsRebuild() -> Bool {
         guard let engine else { return true }
         guard engine.isRunning else { return true }
-        guard let expected = Self.findOutputDevice(matching: "BlackHole") else { return true }
-        guard let audioUnit = engine.outputNode.audioUnit else { return true }
-        var current = AudioDeviceID(0)
-        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-        guard AudioUnitGetProperty(audioUnit, kAudioOutputUnitProperty_CurrentDevice,
-                                   kAudioUnitScope_Global, 0, &current, &size) == noErr else { return true }
-        return current != expected
+        // Do not compare device IDs here. Core Audio may report a transient
+        // zero/different ID while BlackHole is being re-enumerated even though
+        // the running engine is still correctly routed. A false positive would
+        // repeatedly tear down a healthy live stream. Missing devices and a
+        // stopped engine are sufficient signals; the route is set explicitly
+        // when the engine is created.
+        return Self.findOutputDevice(matching: "BlackHole") == nil
     }
 
     private func rebuildEngine(reason: String) {
