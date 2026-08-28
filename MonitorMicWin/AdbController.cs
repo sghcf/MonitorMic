@@ -33,11 +33,16 @@ sealed class AdbController
 
     static string AdbPath => Path.Combine(BaseDir, "adb", "adb.exe");
 
+    public static string InstallBaseDirectory => BaseDir;
+
     /// <summary>运行 adb 并收集输出，带超时强杀。</summary>
     public static async Task<string> Run(string args, int timeoutMs = 15000)
     {
         try
         {
+            if (!File.Exists(AdbPath))
+                return $"执行失败: 找不到 adb.exe（{AdbPath}）";
+
             var psi = new ProcessStartInfo(AdbPath, args)
             {
                 RedirectStandardOutput = true,
@@ -46,11 +51,18 @@ sealed class AdbController
                 CreateNoWindow = true,
                 WorkingDirectory = BaseDir
             };
-            using var p = Process.Start(psi)!;
+            using var p = Process.Start(psi);
+            if (p == null) return "执行失败: 无法启动 adb.exe";
             var stdout = p.StandardOutput.ReadToEndAsync();
             var stderr = p.StandardError.ReadToEndAsync();
-            var exited = await Task.WhenAny(p.WaitForExitAsync(), Task.Delay(timeoutMs)) != null;
-            if (!p.HasExited) { try { p.Kill(); } catch { } }
+            var wait = p.WaitForExitAsync();
+            if (await Task.WhenAny(wait, Task.Delay(timeoutMs)) != wait)
+            {
+                try { p.Kill(entireProcessTree: true); } catch { }
+                await Task.WhenAny(wait, Task.Delay(1000));
+                return $"执行超时（{timeoutMs}ms）: {args}";
+            }
+            await wait;
             return (await stdout + await stderr).Trim();
         }
         catch (Exception ex)
@@ -68,7 +80,9 @@ sealed class AdbController
     public static async Task<bool> IsConnected(string ip)
     {
         var outp = await Run("devices", 8000);
-        return outp.Contains($"{ip}:5555\tdevice");
+        return outp.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries).Any(line =>
+            line.TrimStart().StartsWith($"{ip}:5555", StringComparison.Ordinal)
+            && line.Contains("\tdevice", StringComparison.Ordinal));
     }
 
     // MARK: - 小爱唤醒服务

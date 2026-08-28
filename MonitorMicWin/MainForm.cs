@@ -262,7 +262,7 @@ sealed class MainForm : Form
     void InstallCable()
     {
         // 优先用安装包内置的完整驱动包（含 .inf/.sys/.cat，单独运行 setup 会报缺少 inf）
-        var bundled = Path.Combine(AppContext.BaseDirectory, "driver", "VBCABLE_Setup_x64.exe");
+        var bundled = Path.Combine(AdbController.InstallBaseDirectory, "driver", "VBCABLE_Setup_x64.exe");
         try
         {
             if (File.Exists(bundled))

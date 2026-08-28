@@ -1,4 +1,5 @@
 using Microsoft.Win32;
+using System.Net;
 
 namespace MonitorMicWin;
 
@@ -100,6 +101,11 @@ sealed class AppState
         Busy = true;
         try
         {
+            if (!IPAddress.TryParse(MonitorIP, out _))
+            {
+                Log.Info($"❌ 显示器 IP 无效: {MonitorIP}");
+                return;
+            }
             Log.Info($"连接显示器 {MonitorIP}:5555 …");
             var outp = await AdbController.Connect(MonitorIP);
             Log.Info(outp.Length > 0 ? outp : "已发送连接命令");
@@ -179,13 +185,18 @@ sealed class AppState
         Changed?.Invoke();
     }
 
-    /// <summary>一键修复：连接 → 禁用唤醒 → 装App → 启动接收器 → 启动服务</summary>
+    /// <summary>一键修复：连接 → 释放麦克风 → 安装/授权 → 启动 Android 服务 → 启动 Windows 接收器</summary>
     public async Task HealAll()
     {
         Busy = true;
         try
         {
             Log.Info("——— 一键修复开始 ———");
+            if (!IPAddress.TryParse(MonitorIP, out _))
+            {
+                Log.Info($"❌ 显示器 IP 无效: {MonitorIP}");
+                return;
+            }
             if (!AdbConnected)
             {
                 await AdbController.Connect(MonitorIP);
@@ -199,11 +210,13 @@ sealed class AppState
                 WakeupDisabled = await AdbController.IsWakeupDisabled();
             }
             if (!AppInstalled) await InstallAppInner();
-            if (!Pipeline.Running)
+            else
             {
-                Pipeline.Start(MonitorIP);
+                Log.Info("校验 MicStreamer 录音权限 …");
+                Log.Info(await AdbController.GrantRecordPermission());
             }
             await StartStreaming();
+            if (!Pipeline.Running) Pipeline.Start(MonitorIP);
             Log.Info("——— 一键修复完成 ———");
         }
         finally
