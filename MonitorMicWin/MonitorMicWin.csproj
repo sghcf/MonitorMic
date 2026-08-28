@@ -29,4 +29,15 @@
     <EmbeddedResource Include="app.ico" />
   </ItemGroup>
 
+  <!-- Packaging and local diagnostic projects are separate projects and must
+       not be picked up by the SDK's recursive source-file glob. -->
+  <ItemGroup>
+    <Compile Remove="packaging\**" />
+    <EmbeddedResource Remove="packaging\**" />
+    <None Remove="packaging\**" />
+    <Compile Remove="AudioProbe\**" />
+    <EmbeddedResource Remove="AudioProbe\**" />
+    <None Remove="AudioProbe\**" />
+  </ItemGroup>
+
 </Project>

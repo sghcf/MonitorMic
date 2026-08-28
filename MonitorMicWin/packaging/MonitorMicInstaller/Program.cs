@@ -9,6 +9,7 @@ internal static class Program
 {
     private const string ProductName = "MonitorMic";
     private const string Version = "1.2.1";
+    private const string InstallFolder = "1.2.1-output-fix";
 
     [STAThread]
     private static int Main(string[] args)
@@ -51,7 +52,7 @@ internal static class Program
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Programs",
             ProductName,
-            Version);
+            InstallFolder);
         var exe = Path.Combine(installDir, "MonitorMic.exe");
 
         var answer = MessageBox.Show(

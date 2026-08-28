@@ -283,7 +283,10 @@ sealed class AudioPipeline : IDisposable
             {
                 BufferDuration = TimeSpan.FromSeconds(1.5),
                 DiscardOnBufferOverflow = true,
-                ReadFully = false
+                // Keep the WASAPI client alive while the network jitter buffer is
+                // temporarily empty. With false, WasapiOut can stop reading before
+                // the first PCM block arrives and leave a misleading Playing state.
+                ReadFully = true
             };
             outp = new WasapiOut(dev, AudioClientShareMode.Shared, false, 120);
             outp.Init(prov);

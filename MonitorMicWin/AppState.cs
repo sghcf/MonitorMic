@@ -185,7 +185,7 @@ sealed class AppState
         Changed?.Invoke();
     }
 
-    /// <summary>一键修复：连接 → 释放麦克风 → 安装/授权 → 启动 Android 服务 → 启动 Windows 接收器</summary>
+    /// <summary>一键修复：连接 → 保持阵列服务启用 → 安装/授权 → 启动 Android 服务 → 启动 Windows 接收器</summary>
     public async Task HealAll()
     {
         Busy = true;
@@ -203,17 +203,27 @@ sealed class AppState
                 await Refresh();
                 if (!AdbConnected) { Log.Info("❌ 无法连接显示器，请检查 IP 和网络"); return; }
             }
-            if (!WakeupDisabled)
+            var wakeupChanged = false;
+            if (WakeupDisabled)
             {
-                Log.Info(await AdbController.SetWakeupEnabled(false));
+                Log.Info("恢复小爱远场唤醒（阵列采集需要保持启用）…");
+                Log.Info(await AdbController.SetWakeupEnabled(true));
                 await Task.Delay(800);
                 WakeupDisabled = await AdbController.IsWakeupDisabled();
+                wakeupChanged = true;
             }
             if (!AppInstalled) await InstallAppInner();
             else
             {
                 Log.Info("校验 MicStreamer 录音权限 …");
                 Log.Info(await AdbController.GrantRecordPermission());
+            }
+            if (wakeupChanged)
+            {
+                // Recreate AudioRecord after changing the monitor's microphone
+                // ownership; otherwise an already-running service can retain the
+                // pre-change silent capture session.
+                await StopStreaming();
             }
             await StartStreaming();
             if (!Pipeline.Running) Pipeline.Start(MonitorIP);

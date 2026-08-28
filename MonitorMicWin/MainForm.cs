@@ -235,9 +235,9 @@ sealed class MainForm : Form
         connLabel.Text = adbOk ? $"已连接 {state.DeviceModel}" : "未连接";
         connLabel.ForeColor = adbOk ? Color.ForestGreen : Color.Firebrick;
 
-        wakeupStatus.Text = state.WakeupDisabled ? "已禁用（麦克风可用）" : "运行中（占用麦克风）";
-        wakeupStatus.ForeColor = state.WakeupDisabled ? Color.ForestGreen : Color.Firebrick;
-        wakeupBtn.Text = state.WakeupDisabled ? "恢复" : "禁用";
+        wakeupStatus.Text = state.WakeupDisabled ? "已禁用（串流可能静音）" : "已启用（阵列可用）";
+        wakeupStatus.ForeColor = state.WakeupDisabled ? Color.Firebrick : Color.ForestGreen;
+        wakeupBtn.Text = state.WakeupDisabled ? "恢复阵列" : "禁用（不推荐）";
 
         appStatus.Text = state.AppInstalled ? "已安装" : "未安装";
         appStatus.ForeColor = state.AppInstalled ? Color.ForestGreen : Color.Gray;
