@@ -89,6 +89,7 @@ sealed class TrayApp : System.Windows.Application
 
         Task.Run(async () =>
         {
+            await state.RefreshDependencies();
             await state.Connect();
             for (var i = 0; i < 10 && !state.AdbConnected; i++) await Task.Delay(500);
             if (state.AutoHeal && state.AdbConnected && !state.Pipeline.Streaming) await state.HealAll();

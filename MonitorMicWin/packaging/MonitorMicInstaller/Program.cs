@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Reflection;
 using System.Text;
 using Microsoft.Win32;
+using NAudio.CoreAudioApi;
 
 namespace MonitorMicInstaller;
 
@@ -76,6 +77,7 @@ internal static class Program
         }
 
         WriteLog("开始安装到：" + installDir);
+        ShowDependencyNotice();
         StopExistingInstallation(installDir);
         StopLegacyInstallations(installDir);
         RemoveLegacyInstallations(installDir);
@@ -92,23 +94,9 @@ internal static class Program
         RegisterUninstall(installDir, exe);
         CreateUninstallShortcut(installDir);
 
-        var driver = Path.Combine(installDir, "driver", "VBCABLE_Setup_x64.exe");
-        if (File.Exists(driver))
-        {
-            var driverAnswer = MessageBox.Show(
-                "MonitorMic 需要 VB-CABLE 虚拟声卡才能作为系统麦克风使用。现在安装吗？\n随后 Windows 可能显示 UAC 提示。",
-                ProductName,
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Information);
-            if (driverAnswer == DialogResult.Yes)
-            {
-                InstallDriver(driver);
-            }
-        }
-
         WriteLog("文件、快捷方式和启动项安装完成。 ");
         MessageBox.Show(
-            "MonitorMic 安装完成。\n如果刚安装 VB-CABLE 后 Windows 要求重启，请重启后再使用。",
+            "MonitorMic 安装完成。\n首次运行时请按界面提示检查 ADB 和 VB-CABLE。缺少依赖时可从官方页面手动安装。",
             ProductName,
             MessageBoxButtons.OK,
             MessageBoxIcon.Information);
@@ -296,6 +284,91 @@ internal static class Program
         }
     }
 
+    private static void ShowDependencyNotice()
+    {
+        var adb = ProbeAdb();
+        var cable = ProbeCable();
+        var message = $"电脑依赖预检：\nADB：{adb.Description}\nVB-CABLE：{(cable ? "已检测到" : "尚未安装或未检测到")}\n\n安装程序不会自动安装这些第三方组件。安装完成后可在 MonitorMic 中打开官方来源并重新检测。";
+        if (!adb.Available)
+        {
+            var answer = MessageBox.Show(
+                message + "\n\n是否打开 ADB 官方安装页面？",
+                ProductName,
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Information);
+            if (answer == DialogResult.Yes)
+                Process.Start(new ProcessStartInfo("https://developer.android.com/tools/releases/platform-tools") { UseShellExecute = true });
+        }
+        if (!cable)
+        {
+            var answer = MessageBox.Show(
+                message + "\n\n是否打开 VB-CABLE 官方安装页面？",
+                ProductName,
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Information);
+            if (answer == DialogResult.Yes)
+                Process.Start(new ProcessStartInfo("https://vb-audio.com/Cable/") { UseShellExecute = true });
+        }
+        if (adb.Available && cable)
+            MessageBox.Show(message, ProductName, MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    private static AdbDependency ProbeAdb()
+    {
+        var candidates = (Environment.GetEnvironmentVariable("PATH") ?? "")
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Select(path => Path.Combine(path.Trim(), "adb.exe"))
+            .Concat(new[]
+            {
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Android", "Sdk", "platform-tools", "adb.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Android", "platform-tools", "adb.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Android", "platform-tools", "adb.exe")
+            });
+        foreach (var path in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!File.Exists(path)) continue;
+            try
+            {
+                using var process = Process.Start(new ProcessStartInfo(path, "version")
+                {
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WorkingDirectory = Path.GetDirectoryName(path)!
+                });
+                if (process == null) continue;
+                var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+                process.WaitForExit(5000);
+                if (process.ExitCode == 0 && output.Contains("Android Debug Bridge version", StringComparison.OrdinalIgnoreCase))
+                    return new AdbDependency(true, output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? "可用");
+            }
+            catch { }
+        }
+        return new AdbDependency(false, "尚未安装或版本检查失败");
+    }
+
+    private static bool ProbeCable()
+    {
+        try
+        {
+            using var enumerator = new MMDeviceEnumerator();
+            foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
+            {
+                try
+                {
+                    if (device.FriendlyName.Contains("CABLE Input", StringComparison.OrdinalIgnoreCase))
+                        return true;
+                }
+                finally { device.Dispose(); }
+            }
+            return false;
+        }
+        catch { return false; }
+    }
+
+    private readonly record struct AdbDependency(bool Available, string Description);
+
     private static void VerifyPayload()
     {
         var verifyDir = Path.Combine(Path.GetTempPath(), "MonitorMicVerify-" + Guid.NewGuid().ToString("N"));
@@ -305,9 +378,6 @@ internal static class Program
             var required = new[]
             {
                 Path.Combine(verifyDir, "MonitorMic.exe"),
-                Path.Combine(verifyDir, "micstreamer.apk"),
-                Path.Combine(verifyDir, "adb", "adb.exe"),
-                Path.Combine(verifyDir, "driver", "VBCABLE_Setup_x64.exe"),
                 Path.Combine(verifyDir, "THIRD_PARTY_NOTICES.txt")
             };
             foreach (var path in required)
@@ -384,31 +454,6 @@ internal static class Program
     {
         using var key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
         key?.SetValue(ProductName, $"\"{exe}\" --minimized");
-    }
-
-    private static void InstallDriver(string driver)
-    {
-        try
-        {
-            WriteLog("启动 VB-CABLE 安装程序：" + driver);
-            using var process = Process.Start(new ProcessStartInfo(driver)
-            {
-                WorkingDirectory = Path.GetDirectoryName(driver)!,
-                UseShellExecute = true,
-                Verb = "runas"
-            });
-            process?.WaitForExit();
-            WriteLog("VB-CABLE 安装程序退出码：" + process?.ExitCode);
-        }
-        catch (Exception ex)
-        {
-            WriteLog("VB-CABLE 安装未完成：" + ex.Message);
-            MessageBox.Show(
-                "VB-CABLE 没有完成安装，MonitorMic 程序文件仍已安装。\n你可以稍后右键管理员运行 driver\\VBCABLE_Setup_x64.exe。",
-                ProductName,
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
-        }
     }
 
     private static void WriteLog(string message)

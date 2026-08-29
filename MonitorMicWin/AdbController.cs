@@ -1,13 +1,12 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
-using System.Reflection;
 
 namespace MonitorMicWin;
 
 /// <summary>
 /// ADB 控制层（对应 Mac 版 ADBController.swift）：
-/// 用安装包内置的 platform-tools adb.exe 控制显示器。
+/// 使用系统已安装的 platform-tools adb.exe 控制显示器。
 /// </summary>
 sealed class AdbController
 {
@@ -17,9 +16,8 @@ sealed class AdbController
     const string AdbServerPort = "5038";
 
     /// <summary>
-    /// 内置资源所在目录。单文件发布时 AppContext.BaseDirectory 指向临时解压目录
-    /// （例如 %TEMP%\.net\MonitorMic\xxx=），而内置的 adb\ 与 micstreamer.apk 是被
-    /// 安装在 exe 旁边的松散文件，所以必须用 exe 本身所在的目录。
+    /// 程序目录仅用于定位自身文件。ADB 由用户安装；程序始终通过独立端口
+    /// 运行自己的 ADB server，不接管用户的默认 ADB 会话。
     /// </summary>
     static string BaseDir
     {
@@ -35,89 +33,87 @@ sealed class AdbController
         }
     }
 
-    static string? embeddedResourceDir;
+    static string? verifiedAdbPath;
+    static string? AdbPath => Volatile.Read(ref verifiedAdbPath) ?? WindowsDependencyProbe.FindAdb();
 
-    static string ResourceDir
+    public static string InstallBaseDirectory => BaseDir;
+    public static string? ResolvedAdbPath => AdbPath;
+
+    public static async Task<AdbDependencyStatus> ProbeAsync()
     {
-        get
+        string? lastError = null;
+        foreach (var path in WindowsDependencyProbe.FindAdbCandidates())
         {
-            if (embeddedResourceDir != null) return embeddedResourceDir;
-            if (File.Exists(Path.Combine(BaseDir, "adb", "adb.exe"))
-                && File.Exists(Path.Combine(BaseDir, "micstreamer.apk"))
-                && File.Exists(Path.Combine(BaseDir, "driver", "VBCABLE_Setup_x64.exe")))
-                return BaseDir;
-
-            var assembly = Assembly.GetExecutingAssembly();
-            var resourceNames = assembly.GetManifestResourceNames();
-            const string prefix = "MonitorMic.Payload.";
-            if (!resourceNames.Any(name => name.StartsWith(prefix, StringComparison.Ordinal)))
-                return BaseDir;
-
-            var root = Path.Combine(Path.GetTempPath(), "MonitorMic", "embedded", Environment.ProcessId.ToString());
-            Directory.CreateDirectory(root);
-            foreach (var name in resourceNames)
+            var result = await RunAtPath(path, "version", 8000).ConfigureAwait(false);
+            if (result.ExitCode == 0 && WindowsDependencyProbe.IsAdbVersionOutputValid(result.Output))
             {
-                string? relative = name switch
-                {
-                    "MonitorMic.Payload.Apk" => "micstreamer.apk",
-                    _ when name.StartsWith(prefix + "Adb.", StringComparison.Ordinal) =>
-                        Path.Combine("adb", name[(prefix + "Adb.").Length..]),
-                    _ when name.StartsWith(prefix + "Driver.", StringComparison.Ordinal) =>
-                        Path.Combine("driver", name[(prefix + "Driver.").Length..]),
-                    _ => null
-                };
-                if (relative == null) continue;
-                var target = Path.Combine(root, relative);
-                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                using var input = assembly.GetManifestResourceStream(name)
-                    ?? throw new InvalidDataException("内置资源无法读取: " + name);
-                using var output = File.Create(target);
-                input.CopyTo(output);
+                Volatile.Write(ref verifiedAdbPath, path);
+                var version = result.Output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                    .FirstOrDefault(line => line.Contains("Android Debug Bridge version", StringComparison.OrdinalIgnoreCase))
+                    ?.Trim() ?? "ADB 可用";
+                return new AdbDependencyStatus(true, path, version, "");
             }
-            embeddedResourceDir = root;
-            return root;
+            if (!string.IsNullOrWhiteSpace(result.Output)) lastError = result.Output;
         }
+        Volatile.Write(ref verifiedAdbPath, null);
+        return AdbDependencyStatus.Missing(string.IsNullOrWhiteSpace(lastError)
+            ? "未找到可用 adb.exe"
+            : "已找到 adb.exe，但版本检查失败：" + lastError);
     }
-
-    static string AdbPath => Path.Combine(ResourceDir, "adb", "adb.exe");
-
-    public static string InstallBaseDirectory => ResourceDir;
-    public static string BundledAdbPath => AdbPath;
 
     /// <summary>运行 adb 并收集输出，带超时强杀。</summary>
     public static async Task<string> Run(string args, int timeoutMs = 15000)
     {
         try
         {
-            if (!File.Exists(AdbPath))
-                return $"执行失败: 找不到 adb.exe（{AdbPath}）";
+            var adbPath = AdbPath;
+            if (adbPath == null)
+                return "执行失败: 尚未安装 ADB（请安装 Android Platform-Tools 后点击重新检测）";
+            return (await RunAtPath(adbPath, args, timeoutMs).ConfigureAwait(false)).Output;
+        }
+        catch (Exception ex)
+        {
+            return "执行失败: " + ex.Message;
+        }
+    }
 
-            var psi = new ProcessStartInfo(AdbPath, args)
+    static async Task<(string Output, int ExitCode)> RunAtPath(string adbPath, string args, int timeoutMs)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo(adbPath, args)
             {
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
-                WorkingDirectory = BaseDir
+                WorkingDirectory = Path.GetDirectoryName(adbPath) ?? BaseDir
             };
             psi.Environment["ADB_SERVER_PORT"] = AdbServerPort;
+            var userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (!string.IsNullOrWhiteSpace(userHome))
+            {
+                psi.Environment["HOME"] = userHome;
+                psi.Environment["USERPROFILE"] = userHome;
+                psi.Environment["ANDROID_USER_HOME"] = Path.Combine(userHome, ".android");
+            }
             using var p = Process.Start(psi);
-            if (p == null) return "执行失败: 无法启动 adb.exe";
+            if (p == null) return ("执行失败: 无法启动 adb.exe", -1);
             var stdout = p.StandardOutput.ReadToEndAsync();
             var stderr = p.StandardError.ReadToEndAsync();
             var wait = p.WaitForExitAsync();
-            if (await Task.WhenAny(wait, Task.Delay(timeoutMs)) != wait)
+            if (await Task.WhenAny(wait, Task.Delay(timeoutMs)).ConfigureAwait(false) != wait)
             {
                 try { p.Kill(entireProcessTree: true); } catch { }
-                await Task.WhenAny(wait, Task.Delay(1000));
-                return $"执行超时（{timeoutMs}ms）: {args}";
+                await Task.WhenAny(wait, Task.Delay(1000)).ConfigureAwait(false);
+                return ($"执行超时（{timeoutMs}ms）: {args}", -1);
             }
-            await wait;
-            return (await stdout + await stderr).Trim();
+            await wait.ConfigureAwait(false);
+            return ((await stdout.ConfigureAwait(false) + await stderr.ConfigureAwait(false)).Trim(), p.ExitCode);
         }
         catch (Exception ex)
         {
-            return "执行失败: " + ex.Message;
+            return ("执行失败: " + ex.Message, -1);
         }
     }
 
@@ -176,7 +172,8 @@ sealed class AdbController
     /// <summary>Stop the ADB daemon owned by this application.</summary>
     public static async Task ShutdownAsync()
     {
-        if (!File.Exists(AdbPath)) return;
+        var adbPath = AdbPath;
+        if (adbPath == null) return;
         try
         {
             var result = await Run("kill-server", 8000).ConfigureAwait(false);
@@ -187,13 +184,14 @@ sealed class AdbController
             Log.Info("ADB 服务清理失败: " + ex.Message);
         }
         ForceKillOwnedProcesses();
-        CleanupEmbeddedResources();
     }
 
     /// <summary>Crash/process-exit fallback; does not wait on async work.</summary>
     public static void ForceKillOwnedProcesses()
     {
-        var path = Path.GetFullPath(AdbPath);
+        var adbPath = AdbPath;
+        if (adbPath == null) return;
+        var path = Path.GetFullPath(adbPath);
         foreach (var process in Process.GetProcessesByName("adb"))
         {
             try
@@ -213,15 +211,6 @@ sealed class AdbController
         }
     }
 
-    static void CleanupEmbeddedResources()
-    {
-        var root = embeddedResourceDir;
-        embeddedResourceDir = null;
-        if (root == null) return;
-        try { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
-        catch { }
-    }
-
     // MARK: - 工具
 
     /// <summary>本机到达指定远程 IP 所用的局域网地址（UDP 路由探测，不真的发包）。</summary>
@@ -236,7 +225,4 @@ sealed class AdbController
         catch { return null; }
     }
 
-    /// <summary>安装包内置的 micstreamer.apk 路径。</summary>
-    public static string BundledApkPath =>
-        Path.Combine(ResourceDir, "micstreamer.apk");
 }

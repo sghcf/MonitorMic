@@ -17,5 +17,6 @@
 
   <ItemGroup>
     <EmbeddedResource Include="MonitorMicPayload.zip" LogicalName="MonitorMicPayload.zip" />
+    <PackageReference Include="NAudio" Version="2.2.1" />
   </ItemGroup>
 </Project>

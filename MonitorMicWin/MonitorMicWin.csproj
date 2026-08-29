@@ -18,6 +18,11 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <!-- 单文件发布时把嵌入资源一起打进去 -->
     <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+    <!-- Windows 客户端版本只从 MonitorMicWin/VERSION 读取；命令行 -p:Version=... 可覆盖。 -->
+    <Version Condition="'$(Version)' == ''">$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)VERSION').Trim())</Version>
+    <AssemblyVersion Condition="'$(AssemblyVersion)' == ''">$(Version).0</AssemblyVersion>
+    <FileVersion Condition="'$(FileVersion)' == ''">$(Version).0</FileVersion>
+    <InformationalVersion Condition="'$(InformationalVersion)' == ''">$(Version)</InformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -26,12 +31,6 @@
 
   <ItemGroup>
     <EmbeddedResource Include="app.ico" />
-    <!-- Make the standalone GitHub MonitorMic.exe usable without downloading
-         a separate adb/driver folder. The installer still carries these files
-         as normal sidecars for updates and driver installation. -->
-    <EmbeddedResource Include="adb\**\*" LogicalName="MonitorMic.Payload.Adb.%(Filename)%(Extension)" />
-    <EmbeddedResource Include="driver\**\*" LogicalName="MonitorMic.Payload.Driver.%(Filename)%(Extension)" />
-    <EmbeddedResource Include="micstreamer.apk" LogicalName="MonitorMic.Payload.Apk" />
   </ItemGroup>
 
   <!-- Packaging and local diagnostic projects are separate projects and must

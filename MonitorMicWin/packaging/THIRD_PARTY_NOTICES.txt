@@ -2,7 +2,8 @@ MonitorMic Windows - Third-party notices
 
 VB-CABLE
 --------
-This package includes the VB-CABLE driver package from VB-Audio Software.
+MonitorMic does not bundle or install the VB-CABLE driver. Install it manually
+from the official source when the dependency check reports it missing.
 Origin: https://www.vb-cable.com/
 The VB-CABLE software is donationware. Please identify VB-Audio as the origin
 and consider donating/purchasing a license if you find it useful or use it
@@ -11,7 +12,8 @@ may require a Windows restart.
 
 Android SDK Platform-Tools / adb
 --------------------------------
-The bundled adb executable is from Google's Android SDK Platform-Tools.
+ADB is not bundled. MonitorMic uses an installed adb.exe from Google's Android
+SDK Platform-Tools and keeps its own ADB server on port 5038.
 Origin and license: https://developer.android.com/tools/releases/platform-tools
 Use is subject to the Android Software Development Kit License Agreement.
 

@@ -33,6 +33,12 @@ static class Config
             k.SetValue("OutputGainPercent", (int)MathF.Round(PcmGain.Clamp(value) * 100));
         }
     }
+
+    public static string LastApkPath
+    {
+        get => Registry.GetValue(@"HKEY_CURRENT_USER\" + KeyPath, "LastApkPath", null) as string ?? "";
+        set { using var k = Registry.CurrentUser.CreateSubKey(KeyPath); k.SetValue("LastApkPath", value); }
+    }
 }
 
 /// <summary>全局应用状态（对应 Mac 版 AppState.swift）：连接/服务/接收器/一键修复/轮询。</summary>
@@ -47,8 +53,14 @@ sealed class AppState
     public volatile bool AppInstalled;
     public volatile bool ServiceRunning;
     public volatile bool Busy;
+    public bool AdbAvailable;
+    public string AdbVersion = "";
+    public string? AdbPath;
+    public bool CableAvailable;
     public string DeviceModel = "";
     public bool AutoHeal;
+    public string SelectedApkPath { get; private set; } = "";
+    public bool SelectedApkValid => WindowsDependencyProbe.IsApkPathValid(SelectedApkPath);
 
     public float OutputGain
     {
@@ -72,12 +84,14 @@ sealed class AppState
         if (string.IsNullOrWhiteSpace(MonitorIP)) MonitorIP = "192.168.100.7";
         AutoHeal = Config.AutoHeal;
         Pipeline.OutputGain = Config.OutputGain;
+        SelectedApkPath = Config.LastApkPath;
     }
 
     public void SaveConfig()
     {
         Config.MonitorIP = MonitorIP;
         Config.AutoHeal = AutoHeal;
+        Config.LastApkPath = SelectedApkPath;
     }
 
     public void StartPolling()
@@ -98,6 +112,31 @@ sealed class AppState
         pollTimer = null;
         Pipeline.Stop();
         await AdbController.ShutdownAsync().ConfigureAwait(false);
+    }
+
+    public async Task RefreshDependencies()
+    {
+        var adb = await AdbController.ProbeAsync();
+        AdbAvailable = adb.Available;
+        AdbVersion = adb.Version;
+        AdbPath = adb.Path;
+        CableAvailable = AudioPipeline.DetectCable();
+        Pipeline.CableInstalledNow = CableAvailable;
+        if (!adb.Available) Log.Info("电脑依赖：尚未安装可用 ADB");
+        else Log.Info($"电脑依赖：ADB 可用（{adb.Version}）");
+        Log.Info(CableAvailable ? "电脑依赖：VB-CABLE 已检测到" : "电脑依赖：尚未检测到 VB-CABLE");
+        Changed?.Invoke();
+    }
+
+    public void SelectApk(string path)
+    {
+        SelectedApkPath = path?.Trim() ?? "";
+        SaveConfig();
+        if (SelectedApkValid)
+            Log.Info("已选择显示器端 APK：" + SelectedApkPath);
+        else
+            Log.Info("❌ APK 无效或不可读，请重新选择 .apk 文件");
+        Changed?.Invoke();
     }
 
     public async Task Refresh()
@@ -139,6 +178,8 @@ sealed class AppState
                 Log.Info($"❌ 显示器 IP 无效: {MonitorIP}");
                 return;
             }
+            if (!AdbAvailable) await RefreshDependencies();
+            if (!AdbAvailable) return;
             Log.Info($"连接显示器 {MonitorIP}:5555 …");
             var outp = await AdbController.Connect(MonitorIP);
             Log.Info(outp.Length > 0 ? outp : "已发送连接命令");
@@ -168,26 +209,46 @@ sealed class AppState
         finally { Busy = false; }
     }
 
-    public async Task InstallApp()
+    public async Task InstallSelectedApk()
     {
         Busy = true;
         try
         {
-            await InstallAppInner();
+            if (!SelectedApkValid)
+            {
+                Log.Info("❌ 尚未选择有效的显示器端 APK");
+                return;
+            }
+            if (!AdbConnected)
+            {
+                Log.Info("❌ 请先连接显示器，再安装 APK");
+                return;
+            }
+            Log.Info("安装用户选择的显示器端 APK …");
+            var installResult = await AdbController.InstallApk(SelectedApkPath);
+            Log.Info(installResult);
+            if (!AdbCommandSucceeded(installResult)
+                || !installResult.Contains("Success", StringComparison.OrdinalIgnoreCase))
+            {
+                Log.Info("❌ APK 安装失败，请检查显示器连接后重试");
+                return;
+            }
+            Log.Info("授予录音权限 …");
+            var grantResult = await AdbController.GrantRecordPermission();
+            Log.Info(grantResult);
+            if (!AdbCommandSucceeded(grantResult)) return;
+            Log.Info("启动显示器端串流服务 …");
+            Log.Info(await AdbController.StartService());
+            await Task.Delay(1500);
             await Refresh();
         }
         finally { Busy = false; }
     }
 
-    async Task InstallAppInner()
-    {
-        var apk = AdbController.BundledApkPath;
-        if (!File.Exists(apk)) { Log.Info("❌ 找不到内置 micstreamer.apk"); return; }
-        Log.Info("安装 MicStreamer 到显示器 …");
-        Log.Info(await AdbController.InstallApk(apk));
-        Log.Info("授予录音权限 …");
-        Log.Info(await AdbController.GrantRecordPermission());
-    }
+    static bool AdbCommandSucceeded(string output) =>
+        !output.StartsWith("执行失败", StringComparison.Ordinal)
+        && !output.Contains("Failure", StringComparison.OrdinalIgnoreCase)
+        && !output.Contains("error:", StringComparison.OrdinalIgnoreCase);
 
     public async Task StartStreaming()
     {
@@ -245,7 +306,11 @@ sealed class AppState
                 WakeupDisabled = await AdbController.IsWakeupDisabled();
                 wakeupChanged = true;
             }
-            if (!AppInstalled) await InstallAppInner();
+            if (!AppInstalled)
+            {
+                Log.Info("❌ 显示器端尚未安装 MicStreamer，请在下方选择 APK 并安装；不会自动替换显示器端版本");
+                return;
+            }
             else
             {
                 Log.Info("校验 MicStreamer 录音权限 …");

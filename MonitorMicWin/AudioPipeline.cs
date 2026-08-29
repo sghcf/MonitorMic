@@ -410,6 +410,12 @@ sealed class AudioPipeline : IDisposable
         return null;
     }
 
+    public static bool DetectCable()
+    {
+        using var device = FindCableDevice();
+        return device != null;
+    }
+
     public void PlayTestTone()
     {
         try

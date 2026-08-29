@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
+using MediaBrushes = System.Windows.Media.Brushes;
 
 namespace MonitorMicWin;
 
@@ -32,6 +33,7 @@ public partial class MainWindow : Window
         pipeline = state.Pipeline;
         VersionText.Text = $"v{Program.Version}";
         IpBox.Text = state.MonitorIP;
+        ApkPathBox.Text = state.SelectedApkPath;
         LogList.ItemsSource = displayedLogs;
 
         initializing = true;
@@ -60,7 +62,18 @@ public partial class MainWindow : Window
             LiveBadge.Visibility = pipeline.Streaming ? Visibility.Visible : Visibility.Collapsed;
             DeviceText.Text = pipeline.DeviceName
                 ?? (pipeline.CableInstalledNow ? "VB-CABLE 已安装，等待输出" : "未找到 VB-CABLE CABLE Input");
-            CableButton.Visibility = pipeline.CableInstalledNow ? Visibility.Collapsed : Visibility.Visible;
+            CableButton.Visibility = Visibility.Visible;
+            AdbDependencyStatus.Text = state.AdbAvailable
+                ? $"已安装 · {state.AdbVersion}"
+                : "尚未安装或版本检查失败";
+            AdbDependencyStatus.Foreground = state.AdbAvailable ? MediaBrushes.Green : MediaBrushes.Firebrick;
+            CableDependencyStatus.Text = state.CableAvailable ? "已检测到 VB-CABLE" : "尚未检测到 VB-CABLE";
+            CableDependencyStatus.Foreground = state.CableAvailable ? MediaBrushes.Green : MediaBrushes.Firebrick;
+            ApkSelectionStatus.Text = string.IsNullOrWhiteSpace(state.SelectedApkPath)
+                ? "尚未选择 APK"
+                : state.SelectedApkValid ? "APK 文件可读，可以安装" : "所选文件已失效，请重新选择";
+            ApkSelectionStatus.Foreground = state.SelectedApkValid ? MediaBrushes.Green : MediaBrushes.DarkOrange;
+            ApkPathBox.Text = state.SelectedApkPath;
             RefreshUi();
         };
         timer.Start();
@@ -97,7 +110,7 @@ public partial class MainWindow : Window
 
         SetStatus(AppStatus, state.AppInstalled ? "已安装" : "未安装",
             state.AppInstalled ? System.Windows.Media.Brushes.Green : System.Windows.Media.Brushes.Gray);
-        AppButton.Content = state.AppInstalled ? "重新安装" : "安装";
+        AppButton.Content = "重新检测";
 
         SetStatus(ServiceStatus, state.ServiceRunning ? "运行中 · 端口 50010" : "已停止",
             state.ServiceRunning ? System.Windows.Media.Brushes.Green : System.Windows.Media.Brushes.Gray);
@@ -111,7 +124,9 @@ public partial class MainWindow : Window
 
         var busy = state.Busy;
         ConnectButton.IsEnabled = HealButton.IsEnabled = !busy;
-        WakeupButton.IsEnabled = AppButton.IsEnabled = ServiceButton.IsEnabled = !busy && state.AdbConnected;
+        WakeupButton.IsEnabled = ServiceButton.IsEnabled = !busy && state.AdbConnected;
+        AppButton.IsEnabled = !busy;
+        InstallApkButton.IsEnabled = !busy && state.AdbConnected && state.SelectedApkValid;
         ReceiverButton.IsEnabled = ToneButton.IsEnabled = true;
     }
 
@@ -136,7 +151,27 @@ public partial class MainWindow : Window
     }
 
     async void WakeupButton_Click(object sender, RoutedEventArgs e) => await state.ToggleWakeup();
-    async void AppButton_Click(object sender, RoutedEventArgs e) => await state.InstallApp();
+    async void AppButton_Click(object sender, RoutedEventArgs e)
+    {
+        await state.RefreshDependencies();
+        await state.Refresh();
+    }
+
+    async void DependencyButton_Click(object sender, RoutedEventArgs e) => await state.RefreshDependencies();
+
+    void ChooseApkButton_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "选择显示器端 MicStreamer APK",
+            Filter = "Android APK (*.apk)|*.apk|所有文件 (*.*)|*.*",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        if (dialog.ShowDialog() == true) state.SelectApk(dialog.FileName);
+    }
+
+    async void InstallApkButton_Click(object sender, RoutedEventArgs e) => await state.InstallSelectedApk();
 
     async void ServiceButton_Click(object sender, RoutedEventArgs e)
     {
@@ -147,7 +182,7 @@ public partial class MainWindow : Window
     void ReceiverButton_Click(object sender, RoutedEventArgs e) => state.ToggleReceiver();
 
     void ToneButton_Click(object sender, RoutedEventArgs e) => Task.Run(() => pipeline.PlayTestTone());
-    void CableButton_Click(object sender, RoutedEventArgs e) => InstallCable();
+    void CableButton_Click(object sender, RoutedEventArgs e) => OpenCableWebsite();
 
     void GainCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -173,21 +208,12 @@ public partial class MainWindow : Window
         }
     }
 
-    public void InstallCable()
+    static void OpenCableWebsite()
     {
-        var bundled = Path.Combine(AdbController.InstallBaseDirectory, "driver", "VBCABLE_Setup_x64.exe");
         try
         {
-            if (File.Exists(bundled))
-            {
-                Log.Info("启动内置 VB-CABLE 安装程序（会弹 UAC，请允许；装完需重启电脑）…");
-                Process.Start(new ProcessStartInfo(bundled) { UseShellExecute = true, Verb = "runas" });
-            }
-            else
-            {
-                Log.Info("未找到内置驱动安装包，打开官网下载页…");
-                Process.Start(new ProcessStartInfo("https://vb-audio.com/Cable/") { UseShellExecute = true });
-            }
+            Log.Info("打开 VB-CABLE 官方下载页；安装完成后请点击重新检测…");
+            Process.Start(new ProcessStartInfo("https://vb-audio.com/Cable/") { UseShellExecute = true });
         }
         catch (Exception ex) { Log.Info("启动安装程序失败: " + ex.Message); }
     }
