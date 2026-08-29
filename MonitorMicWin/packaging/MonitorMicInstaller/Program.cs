@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Reflection;
+using System.Text;
 using Microsoft.Win32;
 
 namespace MonitorMicInstaller;
@@ -8,6 +9,7 @@ namespace MonitorMicInstaller;
 internal static class Program
 {
     private const string ProductName = "MonitorMic";
+    private const string AdbServerPort = "5038";
     private static string Version => Assembly.GetExecutingAssembly()
         .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
         ?? "未注入版本";
@@ -20,6 +22,13 @@ internal static class Program
             if (args.Any(arg => string.Equals(arg, "--verify", StringComparison.OrdinalIgnoreCase)))
             {
                 VerifyPayload();
+                return 0;
+            }
+
+            if (args.Any(arg => string.Equals(arg, "--uninstall", StringComparison.OrdinalIgnoreCase)))
+            {
+                ApplicationConfiguration.Initialize();
+                Uninstall();
                 return 0;
             }
 
@@ -52,8 +61,7 @@ internal static class Program
         var installDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Programs",
-            ProductName,
-            Version);
+            ProductName);
         var exe = Path.Combine(installDir, "MonitorMic.exe");
 
         var answer = MessageBox.Show(
@@ -68,6 +76,8 @@ internal static class Program
         }
 
         WriteLog("开始安装到：" + installDir);
+        StopExistingInstallation(installDir);
+        StopLegacyInstallations(installDir);
         ExtractPayload(installDir);
         if (!File.Exists(exe))
         {
@@ -77,6 +87,9 @@ internal static class Program
 
         CreateShortcuts(installDir, exe);
         ConfigureAutoStart(exe);
+        CopyUninstaller(installDir);
+        RegisterUninstall(installDir, exe);
+        CreateUninstallShortcut(installDir);
 
         var driver = Path.Combine(installDir, "driver", "VBCABLE_Setup_x64.exe");
         if (File.Exists(driver))
@@ -103,6 +116,164 @@ internal static class Program
             WorkingDirectory = installDir,
             UseShellExecute = true
         });
+    }
+
+    private static string InstallDirectory => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "Programs",
+        ProductName);
+
+    private static void StopExistingInstallation(string installDir)
+    {
+        var oldExe = Path.Combine(installDir, "MonitorMic.exe");
+        foreach (var process in Process.GetProcessesByName("MonitorMic"))
+        {
+            try
+            {
+                var path = process.MainModule?.FileName;
+                if (path != null && string.Equals(Path.GetFullPath(path), Path.GetFullPath(oldExe), StringComparison.OrdinalIgnoreCase))
+                {
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(5000);
+                }
+            }
+            catch { }
+            finally { process.Dispose(); }
+        }
+
+        StopBundledAdb(Path.Combine(installDir, "adb", "adb.exe"));
+    }
+
+    private static void StopLegacyInstallations(string installDir)
+    {
+        // v2.0.3 installed into ...\MonitorMic\2.0.3. Stop its processes too,
+        // otherwise its old adb.exe can remain locked while the new fixed-root
+        // installation is being created.
+        if (!Directory.Exists(installDir)) return;
+        foreach (var legacyDir in Directory.GetDirectories(installDir))
+        {
+            try { StopExistingInstallation(legacyDir); } catch { }
+        }
+    }
+
+    private static void CopyUninstaller(string installDir)
+    {
+        var source = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(source)) throw new InvalidOperationException("无法定位当前安装器。");
+        File.Copy(source, Path.Combine(installDir, "Uninstall.exe"), overwrite: true);
+    }
+
+    private static void RegisterUninstall(string installDir, string exe)
+    {
+        var uninstaller = Path.Combine(installDir, "Uninstall.exe");
+        using var key = Registry.CurrentUser.CreateSubKey(
+            @"Software\Microsoft\Windows\CurrentVersion\Uninstall\MonitorMic");
+        key?.SetValue("DisplayName", ProductName);
+        key?.SetValue("DisplayVersion", Version);
+        key?.SetValue("Publisher", "MonitorMic");
+        key?.SetValue("InstallLocation", installDir);
+        key?.SetValue("DisplayIcon", exe);
+        key?.SetValue("UninstallString", $"\"{uninstaller}\" --uninstall");
+        key?.SetValue("NoModify", 1, RegistryValueKind.DWord);
+        key?.SetValue("NoRepair", 1, RegistryValueKind.DWord);
+    }
+
+    private static void Uninstall()
+    {
+        var installDir = InstallDirectory;
+        var answer = MessageBox.Show(
+            $"确定卸载 {ProductName}？\n\n将删除：\n{installDir}\n\n不会自动卸载 VB-CABLE 虚拟声卡。",
+            ProductName,
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning);
+        if (answer != DialogResult.Yes)
+        {
+            WriteLog("用户取消卸载。 ");
+            return;
+        }
+
+        RemoveAutoStart();
+        StopExistingInstallation(installDir);
+        StopLegacyInstallations(installDir);
+        DeleteShortcuts();
+        try
+        {
+            Registry.CurrentUser.DeleteSubKeyTree(
+                @"Software\Microsoft\Windows\CurrentVersion\Uninstall\MonitorMic", throwOnMissingSubKey: false);
+        }
+        catch (Exception ex) { WriteLog("删除卸载注册信息失败: " + ex.Message); }
+
+        // The uninstaller runs from inside installDir. Remove the directory
+        // after this process exits through a detached hidden PowerShell task.
+        var script = $"Start-Sleep -Milliseconds 700; Remove-Item -LiteralPath {QuotePowerShell(installDir)} -Recurse -Force -ErrorAction SilentlyContinue";
+        var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+        Process.Start(new ProcessStartInfo("powershell.exe", $"-NoProfile -WindowStyle Hidden -EncodedCommand {encoded}")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true
+        });
+        MessageBox.Show("MonitorMic 已开始卸载。", ProductName, MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    private static string QuotePowerShell(string value) => "'" + value.Replace("'", "''") + "'";
+
+    private static void RemoveAutoStart()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(
+            @"Software\Microsoft\Windows\CurrentVersion\Run", writable: true);
+        key?.DeleteValue(ProductName, throwOnMissingValue: false);
+    }
+
+    private static void DeleteShortcuts()
+    {
+        var startMenuDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs");
+        var startMenu = Path.Combine(startMenuDir, "MonitorMic.lnk");
+        var uninstallShortcut = Path.Combine(startMenuDir, "卸载 MonitorMic.lnk");
+        var desktop = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "MonitorMic.lnk");
+        foreach (var path in new[] { startMenu, uninstallShortcut, desktop })
+        {
+            try { if (File.Exists(path)) File.Delete(path); } catch { }
+        }
+    }
+
+    private static void CreateUninstallShortcut(string installDir)
+    {
+        var startMenuDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.StartMenu),
+            "Programs");
+        CreateShortcut(
+            Path.Combine(startMenuDir, "卸载 MonitorMic.lnk"),
+            installDir,
+            Path.Combine(installDir, "Uninstall.exe"));
+    }
+
+    private static void StopBundledAdb(string adbPath)
+    {
+        if (!File.Exists(adbPath)) return;
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo(adbPath, "kill-server")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = Path.GetDirectoryName(adbPath)!,
+                Environment = { ["ADB_SERVER_PORT"] = AdbServerPort }
+            });
+            process?.WaitForExit(5000);
+        }
+        catch { }
+
+        foreach (var process in Process.GetProcessesByName("adb"))
+        {
+            try
+            {
+                var path = process.MainModule?.FileName;
+                if (path != null && string.Equals(Path.GetFullPath(path), Path.GetFullPath(adbPath), StringComparison.OrdinalIgnoreCase))
+                    process.Kill(entireProcessTree: true);
+            }
+            catch { }
+            finally { process.Dispose(); }
+        }
     }
 
     private static void VerifyPayload()

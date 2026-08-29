@@ -50,7 +50,7 @@ sealed class TrayApp : System.Windows.Application
         menu.Items.Add(autoStartItem);
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add(new Forms.ToolStripMenuItem($"版本 v{Program.Version}") { Enabled = false });
-        menu.Items.Add("退出", null, (_, _) => Quit());
+        menu.Items.Add("退出", null, async (_, _) => await QuitAsync());
 
         tray = new Forms.NotifyIcon
         {
@@ -105,12 +105,20 @@ sealed class TrayApp : System.Windows.Application
         window.Activate();
     }
 
-    void Quit()
+    async Task QuitAsync()
     {
         if (quitting) return;
         quitting = true;
         window.AllowClose = true;
-        state.Pipeline.Dispose();
+        try
+        {
+            await state.ShutdownAsync();
+        }
+        catch (Exception ex)
+        {
+            Log.Info("退出清理失败: " + ex.Message);
+            AdbController.ForceKillOwnedProcesses();
+        }
         tray.Visible = false;
         tray.Dispose();
         window.Close();

@@ -37,6 +37,7 @@ static class Program
             }
             catch { }
         };
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => AdbController.ForceKillOwnedProcesses();
 
         try
         {

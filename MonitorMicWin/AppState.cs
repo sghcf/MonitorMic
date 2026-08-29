@@ -92,6 +92,14 @@ sealed class AppState
         }, null, 3000, 3000);
     }
 
+    public async Task ShutdownAsync()
+    {
+        pollTimer?.Dispose();
+        pollTimer = null;
+        Pipeline.Stop();
+        await AdbController.ShutdownAsync().ConfigureAwait(false);
+    }
+
     public async Task Refresh()
     {
         var connected = await AdbController.IsConnected(MonitorIP);
