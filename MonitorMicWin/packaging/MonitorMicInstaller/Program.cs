@@ -8,8 +8,9 @@ namespace MonitorMicInstaller;
 internal static class Program
 {
     private const string ProductName = "MonitorMic";
-    private const string Version = "1.2.4";
-    private const string InstallFolder = "1.2.4";
+    private static string Version => Assembly.GetExecutingAssembly()
+        .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+        ?? "未注入版本";
 
     [STAThread]
     private static int Main(string[] args)
@@ -52,7 +53,7 @@ internal static class Program
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Programs",
             ProductName,
-            InstallFolder);
+            Version);
         var exe = Path.Combine(installDir, "MonitorMic.exe");
 
         var answer = MessageBox.Show(

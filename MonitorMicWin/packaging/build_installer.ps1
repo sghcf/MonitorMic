@@ -1,12 +1,26 @@
 [CmdletBinding()]
 param(
-    [string]$Configuration = 'Release'
+    [string]$Configuration = 'Release',
+    [string]$Version = ''
 )
 
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$publishDir = Join-Path $env:TEMP "MonitorMic-publish-1.2.4-$Configuration"
+$versionFile = Join-Path $repoRoot 'VERSION'
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    $Version = (Get-Content -LiteralPath $versionFile -Raw).Trim()
+}
+if ($Version -notmatch '^\d+\.\d+\.\d+$') {
+    throw "版本号必须是三段数字（例如 2.0.3）：$Version"
+}
+$msbuildVersionArgs = @(
+    "-p:Version=$Version",
+    "-p:InformationalVersion=$Version",
+    "-p:AssemblyVersion=${Version}.0",
+    "-p:FileVersion=${Version}.0"
+)
+$publishDir = Join-Path $env:TEMP "MonitorMic-publish-$Version-$Configuration"
 $installerProject = Join-Path $PSScriptRoot 'MonitorMicInstaller'
 $installerProjectFile = Join-Path $installerProject 'MonitorMicInstaller.csproj'
 $installerPublishDir = Join-Path $installerProject "bin\$Configuration\net8.0-windows\win-x64\publish"
@@ -23,7 +37,7 @@ if (Test-Path -LiteralPath $publishDir) {
 New-Item -ItemType Directory -Force -Path $publishDir | Out-Null
 Push-Location (Join-Path $repoRoot 'MonitorMicWin')
 try {
-    dotnet publish 'MonitorMicWin.csproj' --configuration $Configuration --runtime win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishDir="$publishDir\"
+    dotnet publish 'MonitorMicWin.csproj' --configuration $Configuration --runtime win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishDir="$publishDir\" @msbuildVersionArgs
     if ($LASTEXITCODE -ne 0) {
         throw "MonitorMic 发布失败，退出码：$LASTEXITCODE"
     }
@@ -42,7 +56,7 @@ $staging = Join-Path $env:TEMP 'MonitorMic-installer-staging'
 $payload = Join-Path $staging 'payload'
 $payloadZip = Join-Path $staging 'MonitorMicPayload.zip'
 $embeddedPayload = Join-Path $installerProject 'MonitorMicPayload.zip'
-$finalInstaller = Join-Path $repoRoot 'MonitorMicWin\MonitorMicSetup-1.2.4.exe'
+$finalInstaller = Join-Path $repoRoot "MonitorMicWin\MonitorMicSetup-$Version.exe"
 
 if (Test-Path -LiteralPath $staging) {
     Remove-Item -LiteralPath $staging -Recurse -Force
@@ -68,7 +82,7 @@ try {
     if (Test-Path -LiteralPath $installerPublishDir) {
         Remove-Item -LiteralPath $installerPublishDir -Recurse -Force
     }
-    dotnet publish 'MonitorMicInstaller.csproj' --configuration $Configuration --runtime win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishDir="bin\$Configuration\net8.0-windows\win-x64\publish\"
+    dotnet publish 'MonitorMicInstaller.csproj' --configuration $Configuration --runtime win-x64 --self-contained true --no-restore -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishDir="bin\$Configuration\net8.0-windows\win-x64\publish\" @msbuildVersionArgs
     if ($LASTEXITCODE -ne 0) {
         throw "安装器 publish 失败，退出码：$LASTEXITCODE"
     }

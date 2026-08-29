@@ -117,7 +117,7 @@ sealed class AdbController
         return !string.IsNullOrWhiteSpace(outp);
     }
 
-    /// <summary>v1.2.0 服务器模式：无需目标参数，客户端自行连接显示器的 50010 端口。</summary>
+    /// <summary>服务器模式：无需目标参数，客户端自行连接显示器的 50010 端口。</summary>
     public static Task<string> StartService() =>
         Shell($"am start-foreground-service -n {Pkg}/.MicService");
 

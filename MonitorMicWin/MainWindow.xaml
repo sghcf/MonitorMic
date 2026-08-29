@@ -56,7 +56,7 @@
                 <TextBlock Text="显示器远场麦克风 → Windows 虚拟麦克风" Foreground="{StaticResource Muted}" FontSize="13" Margin="0,5,0,0" />
             </StackPanel>
             <StackPanel HorizontalAlignment="Right" VerticalAlignment="Center">
-                <TextBlock Text="v1.2.3" x:Name="VersionText" HorizontalAlignment="Right" Foreground="{StaticResource Muted}" />
+                <TextBlock Text="" x:Name="VersionText" HorizontalAlignment="Right" Foreground="{StaticResource Muted}" />
                 <TextBlock x:Name="ConnectionText" HorizontalAlignment="Right" Foreground="#667085" Margin="0,4,0,0" />
             </StackPanel>
         </Grid>

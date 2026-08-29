@@ -8,8 +8,6 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>MonitorMicSetup</AssemblyName>
     <RootNamespace>MonitorMicInstaller</RootNamespace>
-    <Version>1.2.4</Version>
-    <InformationalVersion>1.2.4</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Product>MonitorMic</Product>
     <Description>MonitorMic Windows installer</Description>
