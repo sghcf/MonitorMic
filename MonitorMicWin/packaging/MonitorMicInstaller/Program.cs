@@ -78,6 +78,7 @@ internal static class Program
         WriteLog("开始安装到：" + installDir);
         StopExistingInstallation(installDir);
         StopLegacyInstallations(installDir);
+        RemoveLegacyInstallations(installDir);
         ExtractPayload(installDir);
         if (!File.Exists(exe))
         {
@@ -153,6 +154,25 @@ internal static class Program
         foreach (var legacyDir in Directory.GetDirectories(installDir))
         {
             try { StopExistingInstallation(legacyDir); } catch { }
+        }
+    }
+
+    private static void RemoveLegacyInstallations(string installDir)
+    {
+        if (!Directory.Exists(installDir)) return;
+        foreach (var legacyDir in Directory.GetDirectories(installDir))
+        {
+            var name = Path.GetFileName(legacyDir);
+            if (!System.Text.RegularExpressions.Regex.IsMatch(name, @"^\d+\.\d+\.\d+$")) continue;
+            try
+            {
+                Directory.Delete(legacyDir, recursive: true);
+                WriteLog("已清理旧版本目录：" + legacyDir);
+            }
+            catch (Exception ex)
+            {
+                WriteLog("旧版本目录暂未清理（可能仍被占用）: " + ex.Message);
+            }
         }
     }
 
