@@ -1,14 +1,14 @@
 #!/bin/bash
 # MonitorMic.app 构建脚本：swiftc 直接编译 SwiftUI 应用并打包。
-# 运行前请先准备 BlackHole 2ch；APK 由 micstreamer/build.sh 生成。
+# 运行前请先准备 BlackHole 2ch；显示器 APK 不内置，按需在应用内选择安装。
 set -e
 cd "$(dirname "$0")"
 
 APP="MonitorMic.app"
 ROOT="$(cd .. && pwd)"
-VERSION_FILE="$ROOT/VERSION"
+VERSION_FILE="$PWD/VERSION"
 if [ ! -f "$VERSION_FILE" ]; then
-    echo "❌ 未找到根目录 VERSION 文件。"
+    echo "❌ 未找到 macOS 组件 VERSION 文件。"
     exit 1
 fi
 VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
@@ -18,11 +18,6 @@ ARCH="$(uname -m)"
 if [ ! -x /opt/homebrew/bin/adb ] && [ ! -x /usr/local/bin/adb ]; then
     echo "❌ 未找到 adb。请安装 Android platform-tools。"
     exit 1
-fi
-
-if [ ! -f "$ROOT/micstreamer/build/micstreamer.apk" ]; then
-    echo "== 未找到 APK，尝试构建 micstreamer =="
-    (cd "$ROOT/micstreamer" && ./build.sh)
 fi
 
 echo "== 编译 Swift 源码 =="
@@ -45,7 +40,6 @@ if [ -x /opt/homebrew/bin/adb ]; then
 else
     cp /usr/local/bin/adb "$APP/Contents/Resources/adb"
 fi
-cp "$ROOT/micstreamer/build/micstreamer.apk" "$APP/Contents/Resources/micstreamer.apk"
 cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 chmod +x "$APP/Contents/Resources/adb"
 /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $VERSION" "$APP/Contents/Info.plist"

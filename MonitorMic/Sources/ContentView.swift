@@ -8,6 +8,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 14) {
                 headerSection
                 outputSection
+                apkSection
                 deviceSection
                 logSection
             }
@@ -72,6 +73,40 @@ struct ContentView: View {
                 .font(.headline)
             MonitorCard(state: state)
         }
+    }
+
+    private var apkSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("显示器端 APK", systemImage: "shippingbox")
+                    .font(.headline)
+                Spacer()
+                Text("独立版本：\(state.displayAPKVersion)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            Text("macOS 客户端 v\(state.clientVersion)；显示器端 APK 单独维护，已有服务无需重复安装。")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            Text(state.selectedAPKPath.isEmpty ? "尚未选择 APK" : state.selectedAPKPath)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundColor(state.selectedAPKPath.isEmpty ? .secondary : .primary)
+                .lineLimit(2)
+                .textSelection(.enabled)
+            HStack(spacing: 8) {
+                Button("选择 APK") { state.chooseAPK() }
+                    .controlSize(.small)
+                Button("安装到显示器") {
+                    Task { await state.installApp() }
+                }
+                .controlSize(.small)
+                .buttonStyle(.borderedProminent)
+                .disabled(state.selectedAPKPath.isEmpty || state.busy || !state.monitor.adbConnected)
+            }
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .cornerRadius(10)
     }
 
     private var logSection: some View {
@@ -150,10 +185,12 @@ private struct MonitorCard: View {
                 Task { await state.toggleWakeup() }
             }
             statusRow(icon: "shippingbox", title: "MicStreamer App",
-                      value: device.appInstalled ? "已安装" : "未安装",
+                      value: device.appInstalled
+                        ? "已安装 · APK \(device.apkVersion.isEmpty ? "版本未知" : device.apkVersion)"
+                        : "未安装（不影响普通连接）",
                       ok: device.appInstalled,
-                      actionTitle: device.appInstalled ? "重新安装" : "安装") {
-                Task { await state.installApp() }
+                      actionTitle: "选择 APK") {
+                state.chooseAPK()
             }
             statusRow(icon: "antenna.radiowaves.left.and.right", title: "显示器串流服务",
                       value: device.serviceRunning ? "运行中（端口 50010，可供 Mac / Windows 同时连接）" : "已停止",

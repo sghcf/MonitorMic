@@ -5,8 +5,8 @@ cd "$(dirname "$0")"
 
 APP="MonitorMic.app"
 ROOT="$(cd .. && pwd)"
-VERSION_FILE="$ROOT/VERSION"
-[ -f "$VERSION_FILE" ] || { echo "❌ 未找到根目录 VERSION 文件。"; exit 1; }
+VERSION_FILE="$PWD/VERSION"
+[ -f "$VERSION_FILE" ] || { echo "❌ 未找到 macOS 组件 VERSION 文件。"; exit 1; }
 VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
 [ -n "$VERSION" ] || { echo "❌ VERSION 为空。"; exit 1; }
 DMG="MonitorMic-${VERSION}.dmg"

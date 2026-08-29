@@ -1,5 +1,7 @@
 import Foundation
 import Combine
+import AppKit
+import UniformTypeIdentifiers
 
 private struct MonitorConfig: Codable {
     var schemaVersion = 1
@@ -55,6 +57,7 @@ final class MonitorDevice: ObservableObject, Identifiable {
     @Published var deviceModel = ""
     @Published var wakeupDisabled = false
     @Published var appInstalled = false
+    @Published var apkVersion = ""
     @Published var serviceRunning = false
     @Published var receiverRunning = false
     @Published var streamingActive = false
@@ -93,6 +96,7 @@ final class AppState: ObservableObject {
     }
     @Published var busy = false
     @Published var logText = ""
+    @Published private(set) var selectedAPKPath = ""
 
     let adb = ADBController()
     let receiver: AudioReceiver
@@ -108,6 +112,12 @@ final class AppState: ObservableObject {
     var adbConnected: Bool { monitor.adbConnected }
     var deviceModel: String { monitor.deviceModel }
     var serviceRunning: Bool { monitor.serviceRunning }
+    var clientVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "2.1.0"
+    }
+    var displayAPKVersion: String {
+        monitor.appInstalled ? (monitor.apkVersion.isEmpty ? "已安装（版本未知）" : monitor.apkVersion) : "未安装"
+    }
 
     init() {
         config = ConfigStore.load()
@@ -209,6 +219,7 @@ final class AppState: ObservableObject {
             }
             device.wakeupDisabled = await adb.isWakeupDisabled()
             device.appInstalled = await adb.isAppInstalled()
+            device.apkVersion = device.appInstalled ? await adb.packageVersion() : ""
             let wasRunning = device.serviceRunning
             device.serviceRunning = await adb.isServiceRunning()
             if autoHeal && device.receiverRunning && wasRunning && !device.serviceRunning && device.appInstalled {
@@ -229,6 +240,7 @@ final class AppState: ObservableObject {
         monitor.serviceRunning = false
         monitor.wakeupDisabled = false
         monitor.appInstalled = false
+        monitor.apkVersion = ""
     }
 
     private func updateBlackHoleStatus() {
@@ -267,22 +279,69 @@ final class AppState: ObservableObject {
         await refreshStatus(force: true)
     }
 
-    func installApp() async {
-        busy = true; defer { busy = false }
-        await installAppInner()
-        await refreshStatus(force: true)
-    }
+    func chooseAPK() {
+        let panel = NSOpenPanel()
+        panel.title = "选择显示器端 APK"
+        panel.message = "选择 micstreamer.apk；选择后还需要点击“安装到显示器”才会执行安装。"
+        panel.prompt = "选择"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        if let apkType = UTType(filenameExtension: "apk") {
+            panel.allowedContentTypes = [apkType]
+        }
 
-    private func installAppInner() async {
-        guard let apk = Bundle.main.resourceURL?.appendingPathComponent("micstreamer.apk"),
-              FileManager.default.fileExists(atPath: apk.path) else {
-            log("❌ 找不到内置 micstreamer.apk，请先运行 micstreamer/build.sh")
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let path = url.standardizedFileURL.path
+        guard url.pathExtension.caseInsensitiveCompare("apk") == .orderedSame,
+              FileManager.default.isReadableFile(atPath: path),
+              (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
+            log("❌ 所选文件无效：请选择可读取的 .apk 文件，然后重试")
+            selectedAPKPath = ""
             return
         }
-        log("安装 MicStreamer 到显示器 …")
-        log(await adb.install(apkPath: apk.path))
-        log("授予录音权限 …")
-        log(await adb.shell("pm grant com.example.micstreamer android.permission.RECORD_AUDIO"))
+        selectedAPKPath = path
+        log("✅ 已选择显示器端 APK：\(path)")
+    }
+
+    func installApp() async {
+        guard !selectedAPKPath.isEmpty else {
+            log("❌ 尚未选择 APK。请先点击“选择 APK”，再点击“安装到显示器”")
+            return
+        }
+        let apkPath = selectedAPKPath
+        guard apkPath.hasSuffix(".apk") || apkPath.hasSuffix(".APK"),
+              FileManager.default.isReadableFile(atPath: apkPath) else {
+            log("❌ APK 文件已失效或不可读取，请重新选择后重试")
+            selectedAPKPath = ""
+            return
+        }
+
+        busy = true; defer { busy = false }
+        guard monitor.adbConnected else {
+            log("❌ 尚未连接显示器，无法安装 APK。请先连接 ADB")
+            return
+        }
+        log("安装选中的显示器端 APK …")
+        let output = await adb.install(apkPath: apkPath)
+        log(output)
+        guard output.localizedCaseInsensitiveContains("success"),
+              !output.localizedCaseInsensitiveContains("failure"),
+              !output.localizedCaseInsensitiveContains("error") else {
+            log("❌ APK 安装失败，请检查文件和显示器授权后重试")
+            return
+        }
+        log("授予显示器录音权限 …")
+        let grantOutput = await adb.shell("pm grant com.example.micstreamer android.permission.RECORD_AUDIO")
+        log(grantOutput)
+        if grantOutput.localizedCaseInsensitiveContains("error") || grantOutput.localizedCaseInsensitiveContains("exception") {
+            log("❌ 录音权限授予失败，请在显示器上确认权限后重试")
+            return
+        }
+        log("启动显示器串流服务 …")
+        log(await adb.startService())
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        await refreshStatus(force: true)
     }
 
     func startStreaming() async {
@@ -345,8 +404,7 @@ final class AppState: ObservableObject {
             monitor.wakeupDisabled = await adb.isWakeupDisabled()
         }
         if !monitor.appInstalled {
-            await installAppInner()
-            monitor.appInstalled = await adb.isAppInstalled()
+            log("ℹ️ 显示器端服务尚未安装；跳过 APK 安装，普通连接仍可继续。需要安装时请先选择 APK")
         }
         if !monitor.receiverRunning { toggleReceiver() }
         await startStreamingInner(monitor)

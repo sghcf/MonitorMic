@@ -90,6 +90,15 @@ final class ADBController {
         return out.contains(Self.pkg)
     }
 
+    func packageVersion() async -> String {
+        let out = await shell("dumpsys package \(Self.pkg) | grep -E 'versionName=' | head -1")
+        guard let range = out.range(of: "versionName=") else { return "" }
+        return out[range.upperBound...]
+            .split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\r" })
+            .first
+            .map(String.init) ?? ""
+    }
+
     func install(apkPath: String) async -> String {
         let out = await run(["install", "-r", apkPath], timeout: 60)
         return out.trimmingCharacters(in: .whitespacesAndNewlines)

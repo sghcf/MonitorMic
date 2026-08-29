@@ -1,14 +1,32 @@
 # Changelog
 
-## 2.0.4 - 2026-08-29
+## macOS 2.1.0 - 2026-08-29
+
+- macOS 客户端版本独立为 `MonitorMic/VERSION` 的 `2.1.0`。
+- DMG 不再内置 `micstreamer.apk`，已有显示器服务时可直接连接、接收音频和自动修复。
+- 新增系统 APK 文件选择器：选择并校验路径后，用户明确点击安装，成功后授予录音权限并启动显示器服务。
+- UI 明确区分 macOS 客户端版本与显示器端 APK 版本。
+- macOS 构建继续内置 ADB，以保持连接稳定性。
+
+## Windows 2.1.0
+
+- Windows 客户端作为独立桌面组件维护，版本文件为 `MonitorMicWin/VERSION`。
+- 具体 Windows 构建和发布记录由 Windows 开发分支维护。
+
+## Android 2.0.4 - 2026-08-29
+
+- Android 显示器端继续保持 `2.0.4`，版本文件为 `micstreamer/VERSION`。
+- `versionCode` 保持为 `6`，本次桌面端版本更新不重新编译 Android APK。
+
+## 2.0.4 - 2026-08-29（历史跨平台版本）
 
 - 统一本次跨平台发布使用 `2.0.4` 公开版本号。
-- Android `versionCode` 从 `5` 递增为 `6`，`versionName` 使用根目录 `VERSION` 的 `2.0.4`。
-- macOS 和 Android 构建脚本继续从根目录 `VERSION` 读取公开版本号。
+- Android `versionCode` 从 `5` 递增为 `6`，`versionName` 使用当时根目录 `VERSION` 的 `2.0.4`。
+- 此后各组件改为读取各自目录的版本文件。
 
-## 2.0.3 - 2026-08-29
+## 2.0.3 - 2026-08-29（历史跨平台版本）
 
-- 统一 macOS App、DMG 和 Android APK 使用根目录 `VERSION` 作为公开版本号来源。
+- 统一 macOS App、DMG 和 Android APK 使用当时根目录 `VERSION` 作为公开版本号来源。
 - Android `versionCode` 递增为 `5`，`versionName` 为 `2.0.3`。
 - 移除构建脚本和 AndroidManifest 中遗留的 `1.2.1` 版本写死值。
 

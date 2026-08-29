@@ -28,7 +28,7 @@ Mac 和 Windows 是两个完全独立的客户端。两台电脑可以同时连�
 - 包名：`com.example.micstreamer`
 - Service：`com.example.micstreamer/.MicService`
 - 默认 TCP 端口：`50010`
-- 当前 APK 版本：`1.2.1`，versionCode `4`
+- 当前 APK 版本：`2.0.4`，versionCode `6`；显示器端版本独立于桌面客户端
 - 服务启动命令：
 
 ```sh
@@ -96,7 +96,7 @@ macOS 客户端是“单显示器、单接收器”模型：
 - 日志：`~/Library/Logs/MonitorMic/monitor-mic.log`
 - 当前配置只有一个显示器 IP，默认值为 `192.168.100.7`。
 - 端口固定为 `50010`，因为 Android 服务和 Windows 客户端都使用该端口。
-- `VERSION` 文件是 macOS 客户端版本来源；构建时同步到 `Info.plist`。
+- `MonitorMic/VERSION` 是 macOS 客户端版本来源；构建时同步到 `Info.plist`。Windows 客户端和 Android 显示器端分别使用各自组件目录下的版本文件。
 
 ### 3.4 macOS 构建
 

@@ -4,29 +4,43 @@
 
 普通用户不需要自己编译源码，直接从 [Releases](https://github.com/sghcf/MonitorMic/releases/latest) 下载对应系统的安装包即可。
 
+## 组件版本
+
+三个软件独立维护版本，桌面客户端更新不代表显示器端服务也需要更新：
+
+| 组件 | 当前版本 | 版本文件 | 作用 |
+|---|---:|---|---|
+| macOS 客户端 | **2.1.0** | `MonitorMic/VERSION` | 接收 PCM 并输出到 BlackHole |
+| Windows 客户端 | **2.1.0** | `MonitorMicWin/VERSION` | 接收 PCM 并输出到 VB-CABLE |
+| Android 显示器端 | **2.0.4** | `micstreamer/VERSION` | 从显示器麦克风采集并广播 PCM |
+
 ## 下载
 
-当前版本：**v2.0.4**
+桌面版 v2.1.0 Release 只提供桌面客户端：
 
-- macOS：`MonitorMic-2.0.4.dmg`
-- Windows 安装版：`MonitorMicSetup-2.0.4.exe`
+- macOS：`MonitorMic-2.1.0.dmg`
+- Windows 安装版：`MonitorMicSetup-2.1.0.exe`
 - Windows 便携版：`MonitorMic.exe`
-- Android 显示器端服务：`micstreamer.apk`
+
+显示器端 APK 单独发布。需要安装或更新显示器服务时，请从 **v2.0.4 Release** 下载 `micstreamer.apk`，然后在客户端内手动选择并安装。APK 版本不需要与桌面客户端版本一致。
 
 ## macOS 使用方法
 
-1. 下载并打开 `MonitorMic-2.0.4.dmg`，将 `MonitorMic.app` 拖入“应用程序”。
+1. 下载并打开 `MonitorMic-2.1.0.dmg`，将 `MonitorMic.app` 拖入“应用程序”。
 2. 安装并启用 [BlackHole 2ch](https://existential.audio/blackhole/)。
 3. 打开 MonitorMic，输入显示器的局域网 IP 地址。
-4. 点击“一键修复并启动”。程序会通过 ADB 安装/启动显示器端服务，并连接音频流。
-5. 在 macOS 的声音设置和微信、Zoom、Discord 等应用中选择 `BlackHole 2ch` 作为麦克风。
+4. 点击“一键修复并启动”。已有显示器服务时，程序会直接启动/连接并接收音频，不要求 APK。
+5. 如果显示器端尚未安装服务，在“显示器端 APK”区域点击“选择 APK”，确认路径后再点击“安装到显示器”。安装成功后程序会授予录音权限并启动服务。
+6. 在 macOS 的声音设置和微信、Zoom、Discord 等应用中选择 `BlackHole 2ch` 作为麦克风。
+
+macOS DMG 会内置 ADB（用于连接和控制显示器），不会内置 `micstreamer.apk`。因此普通连接不受 APK 文件是否存在影响。
 
 电脑和显示器需要连接到同一个局域网。首次使用时，显示器需要开启 ADB 调试并允许电脑连接。
 
 ## Windows 使用方法
 
-1. 下载并运行 `MonitorMicSetup-2.0.4.exe`。
-2. 按安装程序提示完成安装；安装包包含 MonitorMic、ADB、显示器端 APK 和 VB-CABLE 相关文件。
+1. 下载并运行 `MonitorMicSetup-2.1.0.exe`。
+2. 按安装程序提示完成安装；安装包包含 MonitorMic、ADB 和 VB-CABLE 相关文件。显示器端 APK 从 v2.0.4 Release 单独获取，并在客户端内按需选择安装。
 3. 打开 MonitorMic，输入显示器的局域网 IP 地址并启动连接。
 4. 在微信、Zoom、Discord 等应用的麦克风设置中选择 `CABLE Output (VB-Audio Virtual Cable)`。
 
@@ -46,9 +60,9 @@ Mac 客户端和 Windows 客户端可以同时连接同一台显示器，互不�
 
 ## Android 显示器端
 
-普通用户不需要单独操作 `micstreamer.apk`，macOS 和 Windows 客户端会在“一键修复”或首次连接时使用它。
+显示器端服务当前版本为 **2.0.4**，`versionCode` 为 `6`。它使用 TCP `50010` 端口广播 48 kHz、16 bit PCM 音频，并支持 Mac 与 Windows 同时连接。
 
-如果需要手动安装，下载 Release 中的 `micstreamer.apk`，并按照显示器端的 Android/ADB 操作流程安装。服务使用 TCP `50010` 端口传输 PCM 音频。
+显示器端已安装并正常运行时，不需要每次更新桌面客户端都重新安装 APK。需要安装或更新时，从 v2.0.4 Release 下载 `micstreamer.apk`，在 macOS 客户端的“显示器端 APK”区域选择后手动安装；Windows 客户端按其自身界面执行相同操作。
 
 ## 故障排查
 
@@ -62,7 +76,7 @@ Mac 客户端和 Windows 客户端可以同时连接同一台显示器，互不�
 
 源码位于本仓库中。macOS 客户端使用 Swift，Windows 客户端使用 .NET 8，显示器端服务使用 Java。详细技术规格和 Windows 开发记录见 [`PROJECT_SPEC_WINDOWS.md`](PROJECT_SPEC_WINDOWS.md)。
 
-构建脚本仍保留在仓库中，主要用于开发和调试；普通用户请优先使用 Releases 中的安装包。
+构建脚本仍保留在仓库中，主要用于开发和调试；普通用户请优先使用 Releases 中的安装包。macOS、Windows、Android 分别读取各自组件目录下的 `VERSION` 文件。
 
 ## 免责声明
 
