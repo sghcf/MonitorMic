@@ -6,16 +6,16 @@
 
 ## 下载
 
-当前版本：**v2.0.3**
+当前版本：**v2.0.4**
 
-- macOS：`MonitorMic-2.0.3.dmg`
-- Windows 安装版：`MonitorMicSetup-2.0.3.exe`
+- macOS：`MonitorMic-2.0.4.dmg`
+- Windows 安装版：`MonitorMicSetup-2.0.4.exe`
 - Windows 便携版：`MonitorMic.exe`
 - Android 显示器端服务：`micstreamer.apk`
 
 ## macOS 使用方法
 
-1. 下载并打开 `MonitorMic-2.0.3.dmg`，将 `MonitorMic.app` 拖入“应用程序”。
+1. 下载并打开 `MonitorMic-2.0.4.dmg`，将 `MonitorMic.app` 拖入“应用程序”。
 2. 安装并启用 [BlackHole 2ch](https://existential.audio/blackhole/)。
 3. 打开 MonitorMic，输入显示器的局域网 IP 地址。
 4. 点击“一键修复并启动”。程序会通过 ADB 安装/启动显示器端服务，并连接音频流。
@@ -25,7 +25,7 @@
 
 ## Windows 使用方法
 
-1. 下载并运行 `MonitorMicSetup-2.0.3.exe`。
+1. 下载并运行 `MonitorMicSetup-2.0.4.exe`。
 2. 按安装程序提示完成安装；安装包包含 MonitorMic、ADB、显示器端 APK 和 VB-CABLE 相关文件。
 3. 打开 MonitorMic，输入显示器的局域网 IP 地址并启动连接。
 4. 在微信、Zoom、Discord 等应用的麦克风设置中选择 `CABLE Output (VB-Audio Virtual Cable)`。

@@ -8,7 +8,7 @@ VERSION_FILE="$ROOT/VERSION"
 [ -f "$VERSION_FILE" ] || { echo "❌ 未找到根目录 VERSION 文件。"; exit 1; }
 VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
 [ -n "$VERSION" ] || { echo "❌ VERSION 为空。"; exit 1; }
-VERSION_CODE=5
+VERSION_CODE=6
 JDK="$ROOT/tools/jdk/Contents/Home/bin"
 BT="$ROOT/tools/sdk/platform"          # build-tools 34
 ANDROID_JAR="$ROOT/tools/sdk/android-34/android.jar"

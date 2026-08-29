@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.4 - 2026-08-29
+
+- 统一本次跨平台发布使用 `2.0.4` 公开版本号。
+- Android `versionCode` 从 `5` 递增为 `6`，`versionName` 使用根目录 `VERSION` 的 `2.0.4`。
+- macOS 和 Android 构建脚本继续从根目录 `VERSION` 读取公开版本号。
+
 ## 2.0.3 - 2026-08-29
 
 - 统一 macOS App、DMG 和 Android APK 使用根目录 `VERSION` 作为公开版本号来源。
