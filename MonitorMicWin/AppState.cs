@@ -1,4 +1,5 @@
 using Microsoft.Win32;
+using System.Net;
 
 namespace MonitorMicWin;
 
@@ -18,6 +19,20 @@ static class Config
         get => (Registry.GetValue(@"HKEY_CURRENT_USER\" + KeyPath, "AutoHeal", 1) as int?) == 1;
         set { using var k = Registry.CurrentUser.CreateSubKey(KeyPath); k.SetValue("AutoHeal", value ? 1 : 0); }
     }
+
+    public static float OutputGain
+    {
+        get
+        {
+            var raw = Registry.GetValue(@"HKEY_CURRENT_USER\" + KeyPath, "OutputGainPercent", 800);
+            return PcmGain.Clamp(raw is int value ? value / 100f : PcmGain.Default);
+        }
+        set
+        {
+            using var k = Registry.CurrentUser.CreateSubKey(KeyPath);
+            k.SetValue("OutputGainPercent", (int)MathF.Round(PcmGain.Clamp(value) * 100));
+        }
+    }
 }
 
 /// <summary>全局应用状态（对应 Mac 版 AppState.swift）：连接/服务/接收器/一键修复/轮询。</summary>
@@ -35,6 +50,16 @@ sealed class AppState
     public string DeviceModel = "";
     public bool AutoHeal;
 
+    public float OutputGain
+    {
+        get => Pipeline.OutputGain;
+        set
+        {
+            Pipeline.OutputGain = value;
+            Config.OutputGain = Pipeline.OutputGain;
+        }
+    }
+
     /// <summary>状态变化（任意线程触发，UI 需 BeginInvoke）。</summary>
     public event Action? Changed;
 
@@ -46,6 +71,7 @@ sealed class AppState
         MonitorIP = Config.MonitorIP;
         if (string.IsNullOrWhiteSpace(MonitorIP)) MonitorIP = "192.168.100.7";
         AutoHeal = Config.AutoHeal;
+        Pipeline.OutputGain = Config.OutputGain;
     }
 
     public void SaveConfig()
@@ -64,6 +90,14 @@ sealed class AppState
             catch { }
             finally { refreshing = false; }
         }, null, 3000, 3000);
+    }
+
+    public async Task ShutdownAsync()
+    {
+        pollTimer?.Dispose();
+        pollTimer = null;
+        Pipeline.Stop();
+        await AdbController.ShutdownAsync().ConfigureAwait(false);
     }
 
     public async Task Refresh()
@@ -100,6 +134,11 @@ sealed class AppState
         Busy = true;
         try
         {
+            if (!IPAddress.TryParse(MonitorIP, out _))
+            {
+                Log.Info($"❌ 显示器 IP 无效: {MonitorIP}");
+                return;
+            }
             Log.Info($"连接显示器 {MonitorIP}:5555 …");
             var outp = await AdbController.Connect(MonitorIP);
             Log.Info(outp.Length > 0 ? outp : "已发送连接命令");
@@ -179,31 +218,48 @@ sealed class AppState
         Changed?.Invoke();
     }
 
-    /// <summary>一键修复：连接 → 禁用唤醒 → 装App → 启动接收器 → 启动服务</summary>
+    /// <summary>一键修复：连接 → 保持阵列服务启用 → 安装/授权 → 启动 Android 服务 → 启动 Windows 接收器</summary>
     public async Task HealAll()
     {
         Busy = true;
         try
         {
             Log.Info("——— 一键修复开始 ———");
+            if (!IPAddress.TryParse(MonitorIP, out _))
+            {
+                Log.Info($"❌ 显示器 IP 无效: {MonitorIP}");
+                return;
+            }
             if (!AdbConnected)
             {
                 await AdbController.Connect(MonitorIP);
                 await Refresh();
                 if (!AdbConnected) { Log.Info("❌ 无法连接显示器，请检查 IP 和网络"); return; }
             }
-            if (!WakeupDisabled)
+            var wakeupChanged = false;
+            if (WakeupDisabled)
             {
-                Log.Info(await AdbController.SetWakeupEnabled(false));
+                Log.Info("恢复小爱远场唤醒（阵列采集需要保持启用）…");
+                Log.Info(await AdbController.SetWakeupEnabled(true));
                 await Task.Delay(800);
                 WakeupDisabled = await AdbController.IsWakeupDisabled();
+                wakeupChanged = true;
             }
             if (!AppInstalled) await InstallAppInner();
-            if (!Pipeline.Running)
+            else
             {
-                Pipeline.Start(MonitorIP);
+                Log.Info("校验 MicStreamer 录音权限 …");
+                Log.Info(await AdbController.GrantRecordPermission());
+            }
+            if (wakeupChanged)
+            {
+                // Recreate AudioRecord after changing the monitor's microphone
+                // ownership; otherwise an already-running service can retain the
+                // pre-change silent capture session.
+                await StopStreaming();
             }
             await StartStreaming();
+            if (!Pipeline.Running) Pipeline.Start(MonitorIP);
             Log.Info("——— 一键修复完成 ———");
         }
         finally

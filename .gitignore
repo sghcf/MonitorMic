@@ -35,6 +35,18 @@ MonitorMicWin/*.exe
 MonitorMicWin/*.pdb
 MonitorMicWin/micstreamer.apk
 MonitorMicWin/driver/
+MonitorMicWin.Tests/bin/
+MonitorMicWin.Tests/obj/
+MonitorMicWin/packaging/*.zip
+MonitorMicWin/packaging/*.sed
+MonitorMicWin/packaging/*.exe
+MonitorMicWin/packaging/**/*.zip
+MonitorMicWin/packaging/**/*.sed
+MonitorMicWin/packaging/**/*.exe
+MonitorMicWin/packaging/**/*.pdb
+MonitorMicWin/packaging/**/*.dll
+MonitorMicWin/packaging/**/bin/
+MonitorMicWin/packaging/**/obj/
 
 # Local tooling archives / extracted SDKs
 tools/*

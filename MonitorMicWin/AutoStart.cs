@@ -25,7 +25,7 @@ static class AutoStart
     {
         try
         {
-            using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, true);
+            using var key = Registry.CurrentUser.CreateSubKey(RunKeyPath);
             if (key == null) return;
             if (enabled)
                 key.SetValue(ValueName, $"\"{Application.ExecutablePath}\" --minimized");

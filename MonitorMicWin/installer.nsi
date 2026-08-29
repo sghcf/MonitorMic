@@ -1,10 +1,12 @@
 ; ============================================================
 ; MonitorMic for Windows 安装包 (NSIS)
 ; 每用户安装：无需管理员权限，双击即用
-; 产物: MonitorMicSetup-1.2.1.exe
+; 产物: MonitorMicSetup-2.0.4.exe
 ; ============================================================
 !define APP_NAME "MonitorMic"
-!define APP_VERSION "1.2.1"
+!ifndef APP_VERSION
+!define APP_VERSION "2.0.4"
+!endif
 !define APP_EXE "MonitorMic.exe"
 
 Unicode true

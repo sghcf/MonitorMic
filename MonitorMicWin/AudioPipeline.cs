@@ -1,57 +1,83 @@
 using System.Net.Sockets;
-using System.Text;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
 namespace MonitorMicWin;
 
 /// <summary>
-/// 音频管线（v1.2.0 客户端模式）：主动连接显示器 MicStreamer 服务器 (TCP 50010)，
-/// 解析 PCM 头 → 抖动缓冲 → WASAPI → VB-CABLE。断线 2s 自动重连。
-/// 自愈逻辑：输出设备丢失/出现自动重建；播放停滞自动重建；支持测试音诊断。
+/// Client-side audio pipeline: connect to the Android MicStreamer TCP server,
+/// parse framed PCM16, keep a bounded jitter buffer, and render only to VB-CABLE.
 /// </summary>
 sealed class AudioPipeline : IDisposable
 {
     public const int Port = 50010;
 
-    /// <summary>receiverRunning, streaming, info</summary>
     public event Action<bool, bool, string>? OnState;
-    /// <summary>0..1 电平</summary>
     public event Action<float>? OnLevel;
 
     readonly object gate = new();
     volatile bool running;
-    Thread? connThread;
+    Task? connectionTask;
+    CancellationTokenSource? connectionCts;
+    TcpClient? activeClient;
 
-    // 流参数（来自 PCM 头）
-    int rate = 48000, channels = 2;
+    int rate = 48000;
+    int channels = 2;
+    float outputGain = PcmGain.Default;
     volatile bool headerParsed;
     DateTime lastDataUtc = DateTime.MinValue;
     DateTime lastLevelUtc = DateTime.MinValue;
 
-    // 输出
     WasapiOut? output;
+    MMDevice? outputDevice;
     BufferedWaveProvider? provider;
     string? deviceName;
+    string? outputDeviceId;
     DateTime lastOutputTry = DateTime.MinValue;
     DateTime lastNoDeviceLog = DateTime.MinValue;
-    DateTime lastDiagLog = DateTime.MinValue;
-
+    DateTime lastOutputStoppedLog = DateTime.MinValue;
+    string? lastObservedCableId;
+    int playbackStoppedObserved;
+    int rebuildingOutput;
     System.Threading.Timer? watchdog;
+
+    // 48,000 Hz × 2 channels × 16-bit = 192,000 bytes/sec. Keep at most 0.5 sec;
+    // normal operation is kept below 0.17 sec to minimize microphone latency.
+    public const int MaxBufferedBytes = 96_000;
+    public const int HighWaterBytes = 32_000;
+    public const int OutputLatencyMilliseconds = 40;
 
     public bool Running => running;
     public bool Streaming => headerParsed && (DateTime.UtcNow - lastDataUtc).TotalSeconds < 2.5;
     public string StreamInfo => headerParsed ? $"{rate} Hz · {channels} ch" : "";
     public string? DeviceName => deviceName;
-    /// <summary>由看门狗后台线程刷新，UI 只读缓存（COM 枚举不能上 100ms UI 定时器）。</summary>
     public volatile bool CableInstalledNow;
+    public float OutputGain
+    {
+        get => Volatile.Read(ref outputGain);
+        set
+        {
+            var clamped = PcmGain.Clamp(value);
+            Volatile.Write(ref outputGain, clamped);
+            Log.Info($"输出增益已设置为 {clamped:0.#}×（峰值限幅）");
+        }
+    }
 
     public void Start(string host, int port = Port)
     {
         Stop();
+        host = host.Trim();
+        var hostType = Uri.CheckHostName(host);
+        if (hostType is not (UriHostNameType.IPv4 or UriHostNameType.Dns))
+        {
+            Log.Info($"❌ 无效的显示器 IP: {host}");
+            return;
+        }
+
         running = true;
-        connThread = new Thread(() => ConnLoop(host, port)) { IsBackground = true, Name = "tcp-conn" };
-        connThread.Start();
+        var cts = new CancellationTokenSource();
+        connectionCts = cts;
+        connectionTask = ConnectLoopAsync(host, port, cts.Token);
         watchdog = new System.Threading.Timer(_ => WatchdogTick(), null, 2000, 2000);
         Log.Info($"音频接收器已启动，连接 {host}:{port}（断线自动重连）");
         OnState?.Invoke(true, false, "");
@@ -60,29 +86,53 @@ sealed class AudioPipeline : IDisposable
     public void Stop()
     {
         running = false;
-        watchdog?.Dispose(); watchdog = null;
+        var cts = Interlocked.Exchange(ref connectionCts, null);
+        cts?.Cancel();
+        var client = Interlocked.Exchange(ref activeClient, null);
+        try { client?.Close(); } catch { }
+
+        var task = Interlocked.Exchange(ref connectionTask, null);
+        if (task != null && task.Id != Task.CurrentId && !task.IsCompleted)
+        {
+            try { task.Wait(1000); } catch { }
+        }
+        cts?.Dispose();
+        watchdog?.Dispose();
+        watchdog = null;
         TeardownOutput();
+        headerParsed = false;
         OnState?.Invoke(false, false, "");
         OnLevel?.Invoke(0);
     }
 
-    // MARK: - TCP 客户端
-
-    void ConnLoop(string host, int port)
+    async Task ConnectLoopAsync(string host, int port, CancellationToken cancellationToken)
     {
-        while (running)
+        while (running && !cancellationToken.IsCancellationRequested)
         {
+            TcpClient? client = null;
             try
             {
-                using var client = new TcpClient { ReceiveTimeout = 10000, ReceiveBufferSize = 65536 };
-                var ar = client.BeginConnect(host, port, null, null);
-                if (!ar.AsyncWaitHandle.WaitOne(5000))
-                    throw new TimeoutException("连接超时");
-                client.EndConnect(ar);
+                client = new TcpClient
+                {
+                    ReceiveBufferSize = 65536,
+                    NoDelay = true
+                };
+                Interlocked.Exchange(ref activeClient, client);
+                await client.ConnectAsync(host, port, cancellationToken).AsTask()
+                    .WaitAsync(TimeSpan.FromSeconds(5), cancellationToken)
+                    .ConfigureAwait(false);
                 Log.Info($"已连接显示器 {host}:{port}");
                 headerParsed = false;
                 lastDataUtc = DateTime.MinValue;
-                ReadLoop(client);
+                await ReadLoopAsync(client, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (PcmStreamProtocolException ex)
+            {
+                if (running) Log.Info($"❌ 协议头无效，断开并重连: {ex.Message}");
             }
             catch (Exception ex)
             {
@@ -92,160 +142,221 @@ sealed class AudioPipeline : IDisposable
                     OnState?.Invoke(true, false, "");
                 }
             }
-            headerParsed = false;
-            if (running)
+            finally
+            {
+                Interlocked.Exchange(ref activeClient, null);
+                try { client?.Dispose(); } catch { }
+                headerParsed = false;
+                if (running && !cancellationToken.IsCancellationRequested)
+                {
+                    ClearQueuedPcm("网络断开");
+                    OnState?.Invoke(true, false, "");
+                }
+            }
+
+            if (running && !cancellationToken.IsCancellationRequested)
             {
                 Log.Info("2s 后重连…");
-                Thread.Sleep(2000);
+                try { await Task.Delay(2000, cancellationToken).ConfigureAwait(false); }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
             }
         }
     }
 
-    void ReadLoop(TcpClient client)
+    async Task ReadLoopAsync(TcpClient client, CancellationToken cancellationToken)
     {
         var stream = client.GetStream();
-        var headerBuf = new MemoryStream();
+        var parser = new PcmStreamParser();
         var buf = new byte[65536];
-        while (running)
+        while (running && !cancellationToken.IsCancellationRequested)
         {
             int n;
-            try { n = stream.Read(buf, 0, buf.Length); }
-            catch (IOException) // 10s 读超时
+            try
             {
-                if ((DateTime.UtcNow - lastDataUtc).TotalSeconds > 10)
-                    throw new Exception("超过 10s 无数据");
-                continue;
+                n = await stream.ReadAsync(buf.AsMemory(), cancellationToken).ConfigureAwait(false);
             }
-            if (n <= 0) throw new Exception("连接被关闭");
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            if (n <= 0) throw new IOException("连接被关闭");
 
-            if (headerParsed)
+            parser.Feed(buf.AsSpan(0, n), pcm =>
             {
-                IngestPcm(buf, n);
-            }
-            else
-            {
-                headerBuf.Write(buf, 0, n);
-                var all = headerBuf.GetBuffer();
-                int total = (int)headerBuf.Length;
-                int nl = Array.IndexOf(all, (byte)'\n', 0, total);
-                if (nl >= 0 && TryParseHeader(all, nl))
-                {
-                    int rest = total - nl - 1;
-                    if (rest > 0)
-                    {
-                        var restBuf = new byte[rest];
-                        Array.Copy(all, nl + 1, restBuf, 0, rest);
-                        IngestPcm(restBuf, rest);
-                    }
-                }
-                else if (total > 256)
-                {
-                    headerBuf.SetLength(0); // 防垃圾数据
-                }
-            }
+                if (!headerParsed && parser.Format is { } format)
+                    ApplyFormat(format);
+                IngestPcm(pcm.Span);
+            });
+            if (!headerParsed && parser.Format is { } parsedFormat)
+                ApplyFormat(parsedFormat);
         }
     }
 
-    bool TryParseHeader(byte[] lineBytes, int len)
+    void ApplyFormat(PcmStreamFormat format)
     {
-        var line = Encoding.ASCII.GetString(lineBytes, 0, len).Trim();
-        var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length == 4 && parts[0] == "PCM"
-            && int.TryParse(parts[1], out var r) && int.TryParse(parts[2], out var ch))
-        {
-            rate = r; channels = ch; headerParsed = true;
-            lastDataUtc = DateTime.UtcNow;
-            Log.Info($"流参数: {r} Hz / {ch} 声道 / {parts[3]} bit");
-            OnState?.Invoke(true, true, $"{r} Hz · {ch} ch");
-            return true;
-        }
-        return false;
-    }
+        if (format.SampleRate != 48000)
+            throw new PcmStreamProtocolException($"不支持的采样率 {format.SampleRate} Hz，当前只接受 48000 Hz PCM16");
 
-    // MARK: - PCM → VB-CABLE
-
-    void IngestPcm(byte[] data, int len)
-    {
+        if (headerParsed && rate == format.SampleRate && channels == format.Channels) return;
+        rate = format.SampleRate;
+        channels = format.Channels;
+        headerParsed = true;
         lastDataUtc = DateTime.UtcNow;
-        UpdateLevel(data, len);
+        Log.Info($"流参数: {format}");
+        OnState?.Invoke(true, true, $"{rate} Hz · {channels} ch");
+    }
+
+    void IngestPcm(ReadOnlySpan<byte> data)
+    {
+        if (data.Length == 0) return;
+        lastDataUtc = DateTime.UtcNow;
+        UpdateLevel(data);
         EnsureOutput();
+
+        // VB-CABLE is exposed as a stereo render endpoint. A mono stream is
+        // explicitly duplicated instead of relying on an implicit device format.
+        var outputData = channels == 1 ? MonoToStereo(data) : data.ToArray();
+        PcmGain.ApplyInPlace(outputData, OutputGain);
         lock (gate)
         {
             if (provider == null) return;
-            // 缓冲积压超过 1.2s 说明消费跟不上，清空追实时（防延迟越攒越大）
-            if (provider.BufferedDuration.TotalSeconds > 1.2)
+            // Drop old queued audio at a high-water mark so latency cannot grow.
+            if (provider.BufferedBytes > HighWaterBytes)
                 provider.ClearBuffer();
-            try { provider.AddSamples(data, 0, len); }
-            catch (Exception ex) { Log.Info("缓冲写入失败: " + ex.Message); }
+            try
+            {
+                provider.AddSamples(outputData, 0, outputData.Length);
+            }
+            catch (Exception ex)
+            {
+                Log.Info("缓冲写入失败: " + ex.Message);
+            }
         }
     }
 
-    void UpdateLevel(byte[] data, int len)
+    void ClearQueuedPcm(string reason)
+    {
+        lock (gate)
+        {
+            provider?.ClearBuffer();
+        }
+        Log.Info($"音频队列已清空（{reason}）");
+    }
+
+    static byte[] MonoToStereo(ReadOnlySpan<byte> data)
+    {
+        var frames = data.Length / 2;
+        var stereo = new byte[frames * 4];
+        for (var i = 0; i < frames; i++)
+        {
+            var source = i * 2;
+            var target = i * 4;
+            stereo[target] = stereo[target + 2] = data[source];
+            stereo[target + 1] = stereo[target + 3] = data[source + 1];
+        }
+        return stereo;
+    }
+
+    void UpdateLevel(ReadOnlySpan<byte> data)
     {
         var now = DateTime.UtcNow;
         if ((now - lastLevelUtc).TotalMilliseconds < 100) return;
         lastLevelUtc = now;
-        double sum = 0; int n = 0;
-        for (int i = 0; i + 1 < len; i += 96 * channels) // 抽样
+        double sum = 0;
+        var count = 0;
+        for (var i = 0; i + 1 < data.Length; i += 96 * channels)
         {
-            short s = (short)(data[i] | (data[i + 1] << 8));
-            sum += Math.Abs(s); n++;
+            var sample = (short)(data[i] | (data[i + 1] << 8));
+            sum += Math.Abs(sample);
+            count++;
         }
-        if (n == 0) return;
-        var level = (float)Math.Min(1.0, sum / n / 32768.0 * 8.0);
+        if (count == 0) return;
+        var level = (float)Math.Min(1.0, sum / count / 32768.0 * 8.0);
         OnLevel?.Invoke(level);
     }
 
-    /// <summary>确保输出设备在线且正在播放（带 3s 防抖）。首次打开不告警。</summary>
     void EnsureOutput()
     {
         if ((DateTime.UtcNow - lastOutputTry).TotalSeconds < 3) return;
         bool ok;
         lock (gate)
         {
-            ok = output is { PlaybackState: PlaybackState.Playing } && deviceName != null;
+            // PlaybackState is checked by the watchdog only after the stopped
+            // event/device identity has been observed. Do not rebuild a healthy
+            // output just because a transient state sample is not Playing.
+            ok = output != null && provider != null && deviceName != null;
         }
-        if (!ok) RebuildOutput();
+        if (!ok) RebuildOutput("输出未就绪");
     }
 
-    void RebuildOutput()
+    void RebuildOutput(string reason)
+    {
+        if (Interlocked.Exchange(ref rebuildingOutput, 1) != 0) return;
+        try
+        {
+            if ((DateTime.UtcNow - lastOutputTry).TotalSeconds < 3) return;
+            RebuildOutputCore(reason);
+        }
+        finally { Volatile.Write(ref rebuildingOutput, 0); }
+    }
+
+    void RebuildOutputCore(string reason)
     {
         lastOutputTry = DateTime.UtcNow;
-        TeardownOutput();
         var dev = FindCableDevice();
         if (dev == null)
         {
             if ((DateTime.UtcNow - lastNoDeviceLog).TotalSeconds > 30)
             {
                 lastNoDeviceLog = DateTime.UtcNow;
-                Log.Info("⚠️ 未找到 VB-CABLE 虚拟声卡，请点击「安装 VB-CABLE」按钮");
+                Log.Info($"⚠️ 未找到 VB-CABLE CABLE Input（{reason}），保留现有输出；不会改用物理扬声器");
             }
             return;
         }
+
+        WasapiOut? outp = null;
         try
         {
-            var prov = new BufferedWaveProvider(new WaveFormat(rate, 16, channels))
+            // Only replace an output after a concrete candidate has been found.
+            // A transient empty enumeration must not destroy a still usable output.
+            TeardownOutput();
+            var prov = new BufferedWaveProvider(new WaveFormat(rate, 16, 2))
             {
-                BufferDuration = TimeSpan.FromSeconds(2),
-                DiscardOnBufferOverflow = false,
-                ReadFully = false
+                BufferLength = MaxBufferedBytes,
+                DiscardOnBufferOverflow = true,
+                // Keep the WASAPI client alive while the network jitter buffer is
+                // temporarily empty. With false, WasapiOut can stop reading before
+                // the first PCM block arrives and leave a misleading Playing state.
+                ReadFully = true
             };
-            var outp = new WasapiOut(dev, AudioClientShareMode.Shared, false, 120);
+            outp = new WasapiOut(dev, AudioClientShareMode.Shared, false, OutputLatencyMilliseconds);
+            outp.PlaybackStopped += OutputPlaybackStopped;
             outp.Init(prov);
             outp.Play();
             lock (gate)
             {
                 provider = prov;
                 output = outp;
+                outputDevice = dev;
                 deviceName = dev.FriendlyName;
+                outputDeviceId = dev.ID;
+                Volatile.Write(ref playbackStoppedObserved, 0);
             }
             Log.Info($"✅ 音频输出已就绪: {dev.FriendlyName}");
             Log.Info($"诊断: 输出格式 = {outp.OutputWaveFormat}");
+            Log.Info($"诊断: 输出增益 = {OutputGain:0.#}×（峰值限幅）");
+            outp = null; // ownership transferred to the active pipeline
+            dev = null; // keep the device wrapper with the active pipeline
         }
         catch (Exception ex)
         {
             Log.Info("❌ 打开 VB-CABLE 失败: " + ex.Message);
-            dev.Dispose();
+            try { if (outp != null) outp.PlaybackStopped -= OutputPlaybackStopped; } catch { }
+            try { outp?.Dispose(); } catch { }
+        }
+        finally
+        {
+            try { dev?.Dispose(); } catch { }
         }
     }
 
@@ -253,12 +364,34 @@ sealed class AudioPipeline : IDisposable
     {
         lock (gate)
         {
+            try { if (output != null) output.PlaybackStopped -= OutputPlaybackStopped; } catch { }
             try { output?.Stop(); } catch { }
             try { output?.Dispose(); } catch { }
+            try { outputDevice?.Dispose(); } catch { }
             output = null;
+            outputDevice = null;
             provider = null;
             deviceName = null;
+            outputDeviceId = null;
+            Volatile.Write(ref playbackStoppedObserved, 0);
         }
+    }
+
+    void OutputPlaybackStopped(object? sender, StoppedEventArgs e)
+    {
+        lock (gate)
+        {
+            if (!ReferenceEquals(sender, output)) return;
+            Volatile.Write(ref playbackStoppedObserved, 1);
+        }
+        if (running) LogOutputStopped();
+    }
+
+    void LogOutputStopped()
+    {
+        if ((DateTime.UtcNow - lastOutputStoppedLog).TotalSeconds < 30) return;
+        lastOutputStoppedLog = DateTime.UtcNow;
+        Log.Info("⚠️ 真实音频输出已停止，等待确认后恢复");
     }
 
     static MMDevice? FindCableDevice()
@@ -266,19 +399,17 @@ sealed class AudioPipeline : IDisposable
         try
         {
             using var enumerator = new MMDeviceEnumerator();
-            foreach (var d in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
+            foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
             {
-                // VB-CABLE 的播放端名为 "CABLE Input (VB-Audio Virtual Cable)"
-                if (d.FriendlyName.Contains("CABLE Input", StringComparison.OrdinalIgnoreCase))
-                    return d;
-                d.Dispose();
+                if (device.FriendlyName.Contains("CABLE Input", StringComparison.OrdinalIgnoreCase))
+                    return device;
+                device.Dispose();
             }
         }
         catch { }
         return null;
     }
 
-    /// <summary>播放 1.5s 440Hz 测试音 → CABLE Input，用于验证虚拟声卡链路。</summary>
     public void PlayTestTone()
     {
         try
@@ -291,22 +422,24 @@ sealed class AudioPipeline : IDisposable
                 Log.Info("❌ 输出未就绪（未找到 CABLE Input？），无法播放测试音");
                 return;
             }
-            int seconds = 1, sr = rate, ch = channels;
-            int total = sr * seconds * ch;
-            var pcm = new byte[total * 2];
-            for (int i = 0; i < total; i++)
+
+            const int seconds = 1;
+            var totalFrames = rate * seconds;
+            var pcm = new byte[totalFrames * 2 * 2];
+            for (var frame = 0; frame < totalFrames; frame++)
             {
-                double t = (double)(i / ch) / sr;
-                short v = (short)(Math.Sin(2 * Math.PI * 440 * t) * 32767 * 0.4);
-                pcm[i * 2] = (byte)(v & 0xff);
-                pcm[i * 2 + 1] = (byte)(v >> 8);
+                var t = (double)frame / rate;
+                var sample = (short)(Math.Sin(2 * Math.PI * 440 * t) * 32767 * 0.4);
+                var offset = frame * 4;
+                pcm[offset] = pcm[offset + 2] = (byte)(sample & 0xff);
+                pcm[offset + 1] = pcm[offset + 3] = (byte)(sample >> 8);
             }
             lock (gate)
             {
                 prov.ClearBuffer();
                 prov.AddSamples(pcm, 0, pcm.Length);
             }
-            Log.Info("🔔 已发送 440Hz 测试音 → 请查看 Windows 设置里「CABLE Output」麦克风电平是否有反应");
+            Log.Info("🔔 已发送 440Hz 测试音 → 请查看 Windows 设置中 CABLE Output 的输入电平");
         }
         catch (Exception ex)
         {
@@ -314,42 +447,60 @@ sealed class AudioPipeline : IDisposable
         }
     }
 
-    // MARK: - 看门狗（后台线程）：输出停滞自愈 + 设备缓存刷新 + 周期诊断
-
-    int tickCount;
-
     void WatchdogTick()
     {
         var streaming = Streaming;
         OnState?.Invoke(running, streaming, streaming ? $"{rate} Hz · {channels} ch" : "");
-        if (!streaming) { OnLevel?.Invoke(0); }
+        if (!streaming) OnLevel?.Invoke(0);
 
-        // 每 2s 在后台线程刷新设备存在性缓存（COM 枚举放 UI 线程会卡）
-        CableInstalledNow = FindCableDevice() != null;
+        using var currentCable = FindCableDevice();
+        CableInstalledNow = currentCable != null;
+        var cableId = currentCable?.ID;
+        var cableChanged = cableId != null && lastObservedCableId != null && cableId != lastObservedCableId;
+        if (cableId != lastObservedCableId)
+        {
+            lastObservedCableId = cableId;
+            if (cableChanged) Log.Info("⚠️ 输出设备已变化，准备确认后重建");
+        }
 
         if (streaming)
         {
-            bool dead;
+            bool outputMissing;
+            bool outputExists;
+            bool playbackStopped;
+            bool deviceChanged;
             lock (gate)
             {
-                dead = output == null || output.PlaybackState != PlaybackState.Playing;
+                outputMissing = output == null || provider == null;
+                outputExists = output != null;
+                playbackStopped = Volatile.Read(ref playbackStoppedObserved) != 0
+                    || output?.PlaybackState == PlaybackState.Stopped;
+                deviceChanged = cableId != null && outputDeviceId != null && cableId != outputDeviceId;
             }
-            if (dead)
+            if (deviceChanged)
             {
-                Log.Info("⚠️ 音频输出异常停止，正在重建…");
-                RebuildOutput();
+                RebuildOutput("设备变化");
             }
-            else if ((DateTime.UtcNow - lastDiagLog).TotalSeconds > 10)
+            else if (playbackStopped)
             {
-                lastDiagLog = DateTime.UtcNow;
-                lock (gate)
+                LogOutputStopped();
+                RebuildOutput("真实输出停止");
+            }
+            else if (outputMissing && currentCable != null)
+            {
+                RebuildOutput("输出未就绪");
+            }
+            else if (currentCable == null && outputExists)
+            {
+                // Device enumeration can be empty briefly while Windows reloads
+                // an endpoint. Keep the existing instance and do not rebuild it.
+                if ((DateTime.UtcNow - lastNoDeviceLog).TotalSeconds > 30)
                 {
-                    if (output != null && provider != null)
-                        Log.Info($"诊断: 缓冲 {provider.BufferedDuration.TotalMilliseconds:F0}ms，播放状态 {output.PlaybackState}");
+                    lastNoDeviceLog = DateTime.UtcNow;
+                    Log.Info("⚠️ VB-CABLE 暂时无法枚举，保留当前输出实例");
                 }
             }
         }
-        tickCount++;
     }
 
     public void Dispose() => Stop();
