@@ -4,6 +4,11 @@ set -e
 cd "$(dirname "$0")"
 
 ROOT="$(cd .. && pwd)"
+VERSION_FILE="$ROOT/VERSION"
+[ -f "$VERSION_FILE" ] || { echo "❌ 未找到根目录 VERSION 文件。"; exit 1; }
+VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
+[ -n "$VERSION" ] || { echo "❌ VERSION 为空。"; exit 1; }
+VERSION_CODE=5
 JDK="$ROOT/tools/jdk/Contents/Home/bin"
 BT="$ROOT/tools/sdk/platform"          # build-tools 34
 ANDROID_JAR="$ROOT/tools/sdk/android-34/android.jar"
@@ -34,7 +39,7 @@ aapt2 link -o build/micstreamer-unsigned.apk \
     --manifest AndroidManifest.xml \
     --min-sdk-version 25 \
     --target-sdk-version 34 \
-    --version-code 4 --version-name 1.2.1
+    --version-code "$VERSION_CODE" --version-name "$VERSION"
 
 echo "== 4. 塞入 classes.dex =="
 cd build/apk && zip -q -X ../micstreamer-unsigned.apk classes.dex && cd ../..

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.3 - 2026-08-29
+
+- 统一 macOS App、DMG 和 Android APK 使用根目录 `VERSION` 作为公开版本号来源。
+- Android `versionCode` 递增为 `5`，`versionName` 为 `2.0.3`。
+- 移除构建脚本和 AndroidManifest 中遗留的 `1.2.1` 版本写死值。
+
 ## 2.0.2 - 2026-08-28
 
 - 修复音频引擎健康检查误判：不再因 Core Audio 设备列表瞬时变化而每隔几秒重建引擎。

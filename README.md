@@ -49,12 +49,15 @@ Windows 源码保留在 `MonitorMicWin/`，使用 .NET 8 和 NAudio。Windows �
 
 ## 版本管理
 
-当前 macOS 客户端版本在根目录 `VERSION` 中维护，构建时会同步到 `Info.plist`。发布前更新 `VERSION` 和 `CHANGELOG.md`，再构建 DMG：
+公开版本号统一在根目录 `VERSION` 中维护。macOS 构建时写入 App 元数据，Android 构建时写入 APK 的 `versionName`；Android `versionCode` 单独递增。发布前更新 `VERSION` 和 `CHANGELOG.md`，再构建 macOS 与 Android 产物：
 
 ```sh
 cd MonitorMic
 ./build_app.sh
 ./make_dmg.sh
+
+cd ../micstreamer
+./build.sh
 ```
 
 构建产物、ADB/驱动二进制、APK 输出、签名文件和本地 SDK 已加入 `.gitignore`，源码和构建脚本可以直接提交到 GitHub。

@@ -6,7 +6,13 @@ cd "$(dirname "$0")"
 
 APP="MonitorMic.app"
 ROOT="$(cd .. && pwd)"
-VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION" 2>/dev/null || echo "2.0.0")"
+VERSION_FILE="$ROOT/VERSION"
+if [ ! -f "$VERSION_FILE" ]; then
+    echo "❌ 未找到根目录 VERSION 文件。"
+    exit 1
+fi
+VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
+[ -n "$VERSION" ] || { echo "❌ VERSION 为空。"; exit 1; }
 ARCH="$(uname -m)"
 
 if [ ! -x /opt/homebrew/bin/adb ] && [ ! -x /usr/local/bin/adb ]; then
@@ -42,8 +48,8 @@ fi
 cp "$ROOT/micstreamer/build/micstreamer.apk" "$APP/Contents/Resources/micstreamer.apk"
 cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 chmod +x "$APP/Contents/Resources/adb"
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$APP/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $VERSION" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $VERSION" "$APP/Contents/Info.plist"
 xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
 
 echo "== Ad-hoc 签名 =="
